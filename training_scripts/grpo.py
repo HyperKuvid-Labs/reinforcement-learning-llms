@@ -46,25 +46,40 @@ def format_ds(example):
 dataset = dataset.map(format_ds)
 
 config = GRPOConfig(
+    # output / logging
     output_dir="qwen3-grpo-gsm8k",
     run_name="qwen3-grpo-A100",
+    logging_steps=5,              # logging every step slows things a bit, this is cleaner
 
-    learning_rate=5e-6,
-    num_train_epochs=1,
-    logging_steps=1,
-    bf16=True,
+    # hyperparams
+    learning_rate=1e-5,           # 0.6b is small, can push lr slightly higher without exploding
+    beta=0.04,                    # standard kl region, keeps updates stable
+    num_iterations=1,             # rl loops usually run 1 pass per batch
 
-    num_generations=16,
-    max_completion_length=1024,
-    beta=0.04,
+    # generation (actual grpo part)
+    num_generations=8,            # 16 sounds nice but rm becomes bottleneck on single a100
+    max_completion_length=512,    # 1024 wastes kv cache unless answers are super long
+    temperature=0.8,              # encourages diverse reasoning paths
+    top_p=0.95,
+    top_k=50,
 
-    per_device_train_batch_size=16,
-    generation_batch_size=32,
-    gradient_accumulation_steps=1,
+    # batch sizing tuned for a100 80gb
+    per_device_train_batch_size=32,   # model is tiny, no reason to stay low
+    generation_batch_size=96,         # main throughput lever for vllm
+    gradient_accumulation_steps=1,    # fits natively, no need to accumulate
 
+    # vllm acceleration
     use_vllm=True,
-    vllm_mode="colocate",
-    vllm_gpu_memory_utilization=0.5,
+    vllm_mode="colocate",             # fastest for single gpu setup
+    vllm_gpu_memory_utilization=0.75, # 0.6 underuses a100 memory
+
+    # optimization
+    bf16=True,                        # a100 loves bf16
+    gradient_checkpointing=False,     # saves compute since model is small
+
+    # grpo specifics
+    epsilon=0.2,                      # slightly wider clip is more stable here
+    loss_type="grpo",
 )
 
 model_id = "Qwen/Qwen3-0.6B"
