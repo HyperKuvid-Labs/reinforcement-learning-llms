@@ -1,4 +1,5 @@
 import torch
+import matplotlib.pyplot as plt
 from trl import GRPOTrainer, GRPOConfig
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 from datasets import load_dataset
@@ -93,3 +94,41 @@ trainer = GRPOTrainer(
 )
 
 trainer.train()
+
+logs = trainer.state.log_history
+
+steps_loss, loss_values = [], []
+steps_reward, reward_values = [], []
+
+for entry in logs:
+    if "loss" in entry:
+        steps_loss.append(entry["step"])
+        loss_values.append(entry["loss"])
+
+    if "reward" in entry:
+        steps_reward.append(entry["step"])
+        reward_values.append(entry["reward"])
+    elif "rewards/mean" in entry:
+        steps_reward.append(entry["step"])
+        reward_values.append(entry["rewards/mean"])
+
+fig, ax1 = plt.subplots(figsize=(12, 6))
+
+color = 'tab:red'
+ax1.set_xlabel('Training Steps')
+ax1.set_ylabel('GRPO Loss', color=color, fontweight='bold')
+ax1.plot(steps_loss, loss_values, color=color, linestyle='-', linewidth=2, label='Loss')
+ax1.tick_params(axis='y', labelcolor=color)
+ax1.grid(True, alpha=0.3)
+
+ax2 = ax1.twinx()
+color = 'tab:blue'
+ax2.set_ylabel('Average Reward', color=color, fontweight='bold')
+ax2.plot(steps_reward, reward_values, color=color, linestyle='-', linewidth=2, label='Reward')
+ax2.tick_params(axis='y', labelcolor=color)
+
+plt.title(f'GRPO Training Dynamics\n(LR: {config.learning_rate}, Beta: {config.beta})')
+fig.tight_layout()
+
+plot_path = "qwen3_grpo_training_metrics.png"
+plt.savefig(plot_path, dpi=300)
