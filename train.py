@@ -7,15 +7,13 @@ from torch.utils.tensorboard import SummaryWriter
 
 from advantages import compute_grpo, compute_reinforce, compute_maxrl
 
-# hyperparams
 batch_size = 256
 num_epochs = 20
 k = 10
 learning_rate = 1e-3
-num_classes = 1000
+num_classes = 101
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# imagenet transforms + loader
 train_transform = transforms.Compose([
     transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
     transforms.RandomHorizontalFlip(p=0.5),
@@ -30,11 +28,37 @@ val_transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
-train_dataset = datasets.ImageFolder(root='./train', transform=train_transform)
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4)
+data_root = './data'
 
-val_dataset = datasets.ImageFolder(root='./val', transform=val_transform)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4)
+train_dataset = datasets.Food101(
+    root=data_root,
+    split='train',
+    download=True,
+    transform=train_transform
+)
+
+val_dataset = datasets.Food101(
+    root=data_root,
+    split='test',
+    download=True,
+    transform=val_transform
+)
+
+train_loader = DataLoader(
+    train_dataset,
+    batch_size=batch_size,
+    shuffle=True,
+    num_workers=4,
+    pin_memory=True
+)
+
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=batch_size,
+    shuffle=False,
+    num_workers=4,
+    pin_memory=True
+)
 
 def sample_rollouts(logits, K):
     probs = torch.softmax(logits, dim=1)
@@ -49,7 +73,6 @@ def rl_loss(inputs, labels, model, advantage_fn, K):
         y_star = labels[i]
         y_samples = sample_rollouts(logit, K)
 
-        # binary reward: 1 if correct, 0 otherwise
         rewards = (y_samples == y_star).float()
         advantages = advantage_fn(rewards)
 
@@ -67,7 +90,7 @@ def evaluate(model, loader):
             preds = model(inputs).argmax(dim=1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
-    return correct / total
+    return correct / total if total > 0 else 0.0
 
 advantage_fns = {
     'grpo': compute_grpo,
@@ -75,9 +98,8 @@ advantage_fns = {
     'maxrl': compute_maxrl,
 }
 
-# train each advantage fn separately and log to tensorboard
 for adv_name, advantage_fn in advantage_fns.items():
-    writer = SummaryWriter(log_dir=f'runs/{adv_name}')
+    writer = SummaryWriter(log_dir=f'runs/food101_{adv_name}')
 
     model = models.resnet50(pretrained=True)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
@@ -103,15 +125,12 @@ for adv_name, advantage_fn in advantage_fns.items():
             global_step += 1
 
         scheduler.step()
-        writer.add_scalar('loss/epoch', epoch_loss / len(train_loader), epoch)
+        avg_epoch_loss = epoch_loss / len(train_loader)
+        writer.add_scalar('loss/epoch', avg_epoch_loss, epoch)
         writer.add_scalar('lr', scheduler.get_last_lr()[0], epoch)
 
         val_acc = evaluate(model, val_loader)
         writer.add_scalar('acc/val', val_acc, epoch)
 
     writer.close()
-
-
-
-
 
