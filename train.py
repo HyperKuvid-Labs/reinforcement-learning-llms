@@ -76,7 +76,7 @@ def rl_loss(inputs, labels, model, advantage_fn, K):
         rewards = (y_samples == y_star).float()
         advantages = advantage_fn(rewards)
 
-        log_probs = torch.log_softmax(logit, dim=1).gather(1, y_samples.unsqueeze(1)).squeeze()
+        log_probs = torch.log_softmax(logit, dim=1).gather(1, y_samples).squeeze()
         loss_term = -torch.mean(log_probs * advantages)
         losses.append(loss_term)
     return torch.mean(torch.stack(losses))
