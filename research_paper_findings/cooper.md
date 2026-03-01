@@ -1,3 +1,0 @@
-# COOPER: CO-OPTMIIZING POLICY AND REWARD MODELS IN RL FOR LLMS
-
-Paper link: https://arxiv.org/pdf/2508.05613

@@ -1,3 +1,0 @@
-# TEXT2REWARD: REWARD SHAPING WITH LANGUAGE MODELS FOR RL
-
-Paper link: https://arxiv.org/pdf/2309.11489
