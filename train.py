@@ -99,6 +99,7 @@ advantage_fns = {
 }
 
 for adv_name, advantage_fn in advantage_fns.items():
+    print(f"\nStarting training with advantage: {adv_name.upper()}")
     writer = SummaryWriter(log_dir=f'runs/food101_{adv_name}')
 
     model = models.resnet50(pretrained=True)
@@ -113,7 +114,7 @@ for adv_name, advantage_fn in advantage_fns.items():
         model.train()
         epoch_loss = 0.0
 
-        for inputs, labels in train_loader:
+        for batch_idx, (inputs, labels) in enumerate(train_loader):
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             loss = rl_loss(inputs, labels, model, advantage_fn, k)
@@ -124,6 +125,9 @@ for adv_name, advantage_fn in advantage_fns.items():
             writer.add_scalar('loss/step', loss.item(), global_step)
             global_step += 1
 
+            if batch_idx % 50 == 0:
+                print(f"  [{adv_name.upper()}] Epoch [{epoch+1}/{num_epochs}] | Batch [{batch_idx}/{len(train_loader)}] | Loss: {loss.item():.4f}")
+
         scheduler.step()
         avg_epoch_loss = epoch_loss / len(train_loader)
         writer.add_scalar('loss/epoch', avg_epoch_loss, epoch)
@@ -131,6 +135,8 @@ for adv_name, advantage_fn in advantage_fns.items():
 
         val_acc = evaluate(model, val_loader)
         writer.add_scalar('acc/val', val_acc, epoch)
+        print(f"  [{adv_name.upper()}] Epoch {epoch+1:2d}/{num_epochs} | Avg Loss: {avg_epoch_loss:.4f} | Val Acc: {val_acc:.4f}")
 
+    print(f"Finished {adv_name.upper()} training.")
     writer.close()
 
