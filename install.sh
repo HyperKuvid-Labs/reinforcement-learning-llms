@@ -1,1 +1,0 @@
-pip install tranformers torch torchvision tensorboard
