@@ -4,82 +4,55 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms, models
 from torch.utils.tensorboard import SummaryWriter
+import torch.amp
 
 from advantages import compute_grpo, compute_reinforce, compute_maxrl
 
-batch_size = 256
-num_epochs = 20
-k = 10
-learning_rate = 1e-3
-num_classes = 101
+batch_size = 128
+num_epochs = 5
+k = 4
+learning_rate = 0.1
+num_classes = 100
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+use_amp = True
 
 train_transform = transforms.Compose([
     transforms.RandomResizedCrop(224, scale=(0.08, 1.0)),
     transforms.RandomHorizontalFlip(p=0.5),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.Normalize(mean=[0.5071, 0.4867, 0.4408], std=[0.2675, 0.2565, 0.2761])
 ])
 
 val_transform = transforms.Compose([
     transforms.Resize(256),
     transforms.CenterCrop(224),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    transforms.Normalize(mean=[0.5071, 0.4867, 0.4408], std=[0.2675, 0.2565, 0.2761])
 ])
 
 data_root = './data'
 
-train_dataset = datasets.Food101(
-    root=data_root,
-    split='train',
-    download=True,
-    transform=train_transform
-)
+train_dataset = datasets.CIFAR100(root=data_root, train=True, download=True, transform=train_transform)
+val_dataset = datasets.CIFAR100(root=data_root, train=False, download=True, transform=val_transform)
 
-val_dataset = datasets.Food101(
-    root=data_root,
-    split='test',
-    download=True,
-    transform=val_transform
-)
-
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=batch_size,
-    shuffle=True,
-    num_workers=4,
-    pin_memory=True
-)
-
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=batch_size,
-    shuffle=False,
-    num_workers=4,
-    pin_memory=True
-)
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
 def sample_rollouts(logits, K):
     probs = torch.softmax(logits, dim=1)
-    samples = torch.multinomial(probs, num_samples=K, replacement=True)
-    return samples
+    return torch.multinomial(probs, num_samples=K, replacement=True)
 
 def rl_loss(inputs, labels, model, advantage_fn, K):
-    logits = model(inputs)
-    losses = []
-    for i in range(inputs.size(0)):
-        logit = logits[i].unsqueeze(0)
-        y_star = labels[i]
-        y_samples = sample_rollouts(logit, K)
+    with torch.amp.autocast(device_type='cuda' if use_amp else 'cpu', enabled=use_amp):
+        logits = model(inputs)
+        y_samples = sample_rollouts(logits, K)
 
-        rewards = (y_samples == y_star).float()
+        rewards = (y_samples == labels.view(-1, 1)).float()
         advantages = advantage_fn(rewards)
 
-        log_probs = torch.log_softmax(logit, dim=1).gather(1, y_samples).squeeze()
-        loss_term = -torch.mean(log_probs * advantages)
-        losses.append(loss_term)
-    return torch.mean(torch.stack(losses))
+        log_probs = torch.log_softmax(logits, dim=1).gather(1, y_samples)
+        policy_loss = -(log_probs * advantages).mean()
+    return policy_loss
 
 def evaluate(model, loader):
     model.eval()
@@ -87,7 +60,8 @@ def evaluate(model, loader):
     with torch.no_grad():
         for inputs, labels in loader:
             inputs, labels = inputs.to(device), labels.to(device)
-            preds = model(inputs).argmax(dim=1)
+            with torch.amp.autocast(device_type='cuda' if use_amp else 'cpu', enabled=use_amp):
+                preds = model(inputs).argmax(dim=1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
     return correct / total if total > 0 else 0.0
@@ -98,11 +72,13 @@ advantage_fns = {
     'maxrl': compute_maxrl,
 }
 
-for adv_name, advantage_fn in advantage_fns.items():
-    print(f"\nStarting training with advantage: {adv_name.upper()}")
-    writer = SummaryWriter(log_dir=f'runs/food101_{adv_name}')
 
-    model = models.resnet50(pretrained=True)
+def train_experiment(adv_name, advantage_fn, callbacks=None):
+    cb = callbacks or {}
+    _scaler = torch.amp.GradScaler(enabled=use_amp)
+    writer = SummaryWriter(log_dir=f'runs/cifar100_{adv_name}')
+
+    model = models.resnet18(pretrained=False)
     model.fc = nn.Linear(model.fc.in_features, num_classes)
     model.to(device)
 
@@ -118,15 +94,17 @@ for adv_name, advantage_fn in advantage_fns.items():
             inputs, labels = inputs.to(device), labels.to(device)
             optimizer.zero_grad()
             loss = rl_loss(inputs, labels, model, advantage_fn, k)
-            loss.backward()
-            optimizer.step()
+
+            _scaler.scale(loss).backward()
+            _scaler.step(optimizer)
+            _scaler.update()
 
             epoch_loss += loss.item()
             writer.add_scalar('loss/step', loss.item(), global_step)
             global_step += 1
 
-            if batch_idx % 50 == 0:
-                print(f"  [{adv_name.upper()}] Epoch [{epoch+1}/{num_epochs}] | Batch [{batch_idx}/{len(train_loader)}] | Loss: {loss.item():.4f}")
+            if 'on_batch' in cb:
+                cb['on_batch'](batch_idx, len(train_loader), loss.item())
 
         scheduler.step()
         avg_epoch_loss = epoch_loss / len(train_loader)
@@ -135,8 +113,17 @@ for adv_name, advantage_fn in advantage_fns.items():
 
         val_acc = evaluate(model, val_loader)
         writer.add_scalar('acc/val', val_acc, epoch)
-        print(f"  [{adv_name.upper()}] Epoch {epoch+1:2d}/{num_epochs} | Avg Loss: {avg_epoch_loss:.4f} | Val Acc: {val_acc:.4f}")
 
-    print(f"Finished {adv_name.upper()} training.")
+        if 'on_epoch' in cb:
+            cb['on_epoch'](epoch, num_epochs, avg_epoch_loss, val_acc, scheduler.get_last_lr()[0])
+
     writer.close()
+    if 'on_done' in cb:
+        cb['on_done'](adv_name)
+
+
+if __name__ == '__main__':
+    for adv_name, advantage_fn in advantage_fns.items():
+        print(f"\nStarting training with advantage: {adv_name.upper()}")
+        train_experiment(adv_name, advantage_fn)
 
