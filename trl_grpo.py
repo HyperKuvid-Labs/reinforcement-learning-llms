@@ -343,7 +343,6 @@ training_args = GRPOConfig(
     bf16=True,
     tf32=True,
     num_generations=4,
-    group_size=4,
     generation_kwargs={
         "max_new_tokens": 128,
         "temperature": 0.7,
@@ -352,8 +351,6 @@ training_args = GRPOConfig(
     },
     logging_steps=10,
     save_steps=500,
-    use_peft=True,
-    peft_config=peft_config,
     report_to="tensorboard",
     use_vllm=True,
     vllm_mode="colocate"
