@@ -334,6 +334,7 @@ peft_config = LoraConfig(
 
 training_args = GRPOConfig(
     output_dir="./grpo_gsm8k",
+    logging_dir="./grpo_gsm8k/tb_logs",
     num_train_epochs=1,
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
@@ -343,10 +344,10 @@ training_args = GRPOConfig(
     tf32=True,
     max_length=512,
     max_prompt_length=256,
-    num_generations=8,
+    num_generations=4,
     group_size=4,
     generation_kwargs={
-        "max_new_tokens": 256,
+        "max_new_tokens": 128,
         "temperature": 0.7,
         "top_p": 0.9,
         "do_sample": True,
@@ -355,7 +356,9 @@ training_args = GRPOConfig(
     save_steps=500,
     use_peft=True,
     peft_config=peft_config,
-    report_to="none",
+    report_to="tensorboard",
+    use_vllm=True,
+    vllm_mode="colocate"
 )
 
 model     = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
@@ -402,8 +405,6 @@ trainer = GRPOTrainer(
     train_dataset=dataset,
     tokenizer=tokenizer,
     reward_funcs=reasoning_accuracy_reward,
-    vllm_model=vllm_model,
-    vllm_tokenizer=vllm_tokenizer,
     callbacks=[_rich_cb],
 )
 

@@ -10,8 +10,8 @@ pip install trl -U -q
 pip isntall "trl[vllm]" -U -q || echo "TRL vLLM support install attempted"
 
 # Unsloth (fastest GRPO)
-pip install "unsloth[cu121] @ git+https://github.com/unslothai/unsloth.git" -q --no-cache-dir
-pip install vllm --upgrade -q || echo "vLLM install skipped (optional)"
+pip install unsloth -U -q || echo "Unsloth install attempted"
+# pip install vllm --upgrade -q || echo "vLLM install skipped (optional)"
 
 # VERL dependencies
 pip install hydra-core omegaconf pandas pyarrow sentencepiece protobuf -q

@@ -26,10 +26,10 @@ from rich.text import Text
 # required patch to get grpo working with unsloth
 PatchFastRL("GRPO", FastLanguageModel)
 
-max_seq_length = 1024      # longer helps with reasoning chains
+max_seq_length = 512       # shorter seqs for faster throughput
 dtype = None               # auto-detects bfloat16 on a100
 load_in_4bit = True        # 4bit keeps memory low with barely any accuracy loss
-model_name = "Qwen/Qwen2.5-7B-Instruct"
+model_name = "Qwen/Qwen3.5-4B-Instruct"
 
 
 # ─── Sparkline ────────────────────────────────────────────────────────────────
@@ -315,10 +315,10 @@ model, tokenizer = FastLanguageModel.from_pretrained(
 
 model = FastLanguageModel.get_peft_model(
     model,
-    r                          = 64,
+    r                          = 16,
     target_modules             = ["q_proj", "k_proj", "v_proj", "o_proj",
                                    "gate_proj", "up_proj", "down_proj"],
-    lora_alpha                 = 64,
+    lora_alpha                 = 32,
     lora_dropout               = 0,
     bias                       = "none",
     use_gradient_checkpointing = "unsloth",
@@ -361,10 +361,11 @@ reward_funcs = [accuracy_reward_func, format_reward_func]
 # ─── Training config ──────────────────────────────────────────────────────────
 
 training_args = GRPOConfig(
-    output_dir                  = "outputs/gsm8k_grpo_qwen7b",
+    output_dir                  = "outputs/gsm8k_grpo_qwen3b",
+    logging_dir                 = "outputs/gsm8k_grpo_qwen3b/tb_logs",
     num_train_epochs            = 1,
-    per_device_train_batch_size = 2,
-    gradient_accumulation_steps = 8,
+    per_device_train_batch_size = 4,
+    gradient_accumulation_steps = 4,
     learning_rate               = 5e-6,
     optim                       = "adamw_8bit",
     weight_decay                = 0.01,
@@ -376,13 +377,13 @@ training_args = GRPOConfig(
     max_steps                   = -1,
     bf16                        = is_bfloat16_supported(),
     fp16                        = not is_bfloat16_supported(),
-    report_to                   = "none",
-    num_generations             = 8,
+    report_to                   = "tensorboard",
+    num_generations             = 4,
     group_size                  = 4,
     max_length                  = max_seq_length,
-    max_prompt_length           = 512,
+    max_prompt_length           = 256,
     generation_kwargs           = dict(
-        max_new_tokens = 384,
+        max_new_tokens = 192,
         temperature    = 0.7,
         top_p          = 0.95,
         do_sample      = True,
@@ -436,7 +437,7 @@ trainer = GRPOTrainer(
 
 trainer.train()
 _t_trained = time.monotonic()   # training loop done
-trainer.save_model("gsm8k_grpo_qwen7b_final")
+trainer.save_model("gsm8k_grpo_qwen3b_final")
 _t_saved = time.monotonic()     # checkpoint written
 
 _live_t.join(timeout=3)
