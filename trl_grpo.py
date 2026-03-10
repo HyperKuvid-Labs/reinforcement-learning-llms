@@ -8,7 +8,7 @@ import torch
 from datasets import load_dataset
 from peft import LoraConfig
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback, TrainerControl, TrainerState
-from trl import GRPOTrainer, GRPOConfig, setup_vllm
+from trl import GRPOTrainer, GRPOConfig
 from trl.rewards import reasoning_accuracy_reward
 
 from rich import box
