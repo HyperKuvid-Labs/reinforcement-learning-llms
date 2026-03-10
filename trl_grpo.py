@@ -317,12 +317,12 @@ _t_data = time.monotonic()   # dataset ready
 
 # ─── vLLM + LoRA + config ─────────────────────────────────────────────────────
 
-vllm_model, vllm_tokenizer = setup_vllm(
-    model_name,
-    dtype="bfloat16",
-    tensor_parallel_size=1,
-)
-_t_vllm = time.monotonic()   # vLLM engine ready
+# vllm_model, vllm_tokenizer = setup_vllm(
+#     model_name,
+#     dtype="bfloat16",
+#     tensor_parallel_size=1,
+# )
+# _t_vllm = time.monotonic()   # vLLM engine ready
 
 peft_config = LoraConfig(
     r=16,
