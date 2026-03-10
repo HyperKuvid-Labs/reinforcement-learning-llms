@@ -361,8 +361,8 @@ reward_funcs = [accuracy_reward_func, format_reward_func]
 # ─── Training config ──────────────────────────────────────────────────────────
 
 training_args = GRPOConfig(
-    output_dir                  = "outputs/gsm8k_grpo_qwen3b",
-    logging_dir                 = "outputs/gsm8k_grpo_qwen3b/tb_logs",
+    output_dir                  = "outputs/gsm8k_grpo_qwen4b",
+    logging_dir                 = "outputs/gsm8k_grpo_qwen4b/tb_logs",
     num_train_epochs            = 1,
     per_device_train_batch_size = 4,
     gradient_accumulation_steps = 4,
