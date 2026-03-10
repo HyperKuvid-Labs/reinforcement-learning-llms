@@ -398,7 +398,6 @@ trainer = GRPOTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    tokenizer=tokenizer,
     reward_funcs=reasoning_accuracy_reward,
     callbacks=[_rich_cb],
 )
