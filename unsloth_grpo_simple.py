@@ -10,7 +10,7 @@ from transformers import AutoTokenizer
 PatchFastRL("GRPO", FastLanguageModel)
 
 max_seq_length = 512
-dtype = torch.bfloat16   # ← explicit dtype instead of None
+dtype = None  # ← explicit dtype instead of None
 load_in_4bit = True
 model_name = "Qwen/Qwen3-8B"
 
@@ -94,8 +94,6 @@ training_args = GRPOConfig(
     save_strategy="steps",
     save_steps=200,
     max_steps=-1,
-    bf16=True,     # ← force bf16, don't use is_bfloat16_supported() toggle
-    fp16=False,    # ← must be False when bf16=True
     report_to="tensorboard",
     num_generations=4,
     max_prompt_length=256,
