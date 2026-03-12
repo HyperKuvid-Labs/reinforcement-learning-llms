@@ -430,6 +430,14 @@ training_args = GRPOConfig(
 
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
+# Fix for trl/peft compatibility: GRPOTrainer expects warnings_issued attribute
+if not hasattr(model, "warnings_issued"):
+    model.warnings_issued = {}
+
 _t_model = time.monotonic()  # model + tokenizer loaded
 
 

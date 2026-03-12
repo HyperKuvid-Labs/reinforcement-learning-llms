@@ -35,7 +35,7 @@ PatchFastRL("GRPO", FastLanguageModel)
 max_seq_length = 512  # shorter seqs for faster throughput
 dtype = None  # auto-detects bfloat16 on a100
 load_in_4bit = True  # 4bit keeps memory low with barely any accuracy loss
-model_name = "Qwen/Qwen3.5-4B"
+model_name = "Qwen/Qwen3-8B"
 
 
 # ─── Sparkline ────────────────────────────────────────────────────────────────
@@ -376,7 +376,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=model_name,
     max_seq_length=max_seq_length,
     dtype=dtype,
-    load_in_4bit=load_in_4bit,
+    load_in_4bit=False,       # avoid conflict with load_in_16bit
+    load_in_16bit=True,
 )
 
 model = FastLanguageModel.get_peft_model(
@@ -399,6 +400,14 @@ model = FastLanguageModel.get_peft_model(
     use_rslora=False,
     loftq_config=None,
 )
+
+# Fix for trl/peft compatibility: GRPOTrainer expects warnings_issued attribute
+if not hasattr(model, "warnings_issued"):
+    model.warnings_issued = {}
+
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
 _t_model = time.monotonic()  # model + LoRA ready
 
 dataset = load_dataset("openai/gsm8k", "main", split="train")
@@ -426,10 +435,10 @@ def extract_boxed_answer(text: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
-def accuracy_reward_func(completions, ground_truths, **kwargs):
+def accuracy_reward_func(completions, ground_truth, **kwargs):
     return [
         1.0 if extract_boxed_answer(c) == gt else 0.0
-        for c, gt in zip(completions, ground_truths)
+        for c, gt in zip(completions, ground_truth)
     ]
 
 
@@ -451,7 +460,7 @@ training_args = GRPOConfig(
     learning_rate=5e-6,
     optim="adamw_8bit",
     weight_decay=0.01,
-    warmup_ratio=0.1,
+    warmup_steps=100,
     lr_scheduler_type="cosine",
     logging_steps=5,
     save_strategy="steps",
@@ -461,16 +470,11 @@ training_args = GRPOConfig(
     fp16=not is_bfloat16_supported(),
     report_to="tensorboard",
     num_generations=4,
-    # group_size                  = 4,
-    # max_length                  = max_seq_length,
     max_prompt_length=256,
-    generation_kwargs=dict(
-        max_new_tokens=192,
-        temperature=0.7,
-        top_p=0.95,
-        do_sample=True,
-    ),
-    use_vllm=False,  # as we have enabled unsloth's own gradient checkpointing and optimizations, vLLM isn't needed here and actually causes instability with GRPO's long generations (which may be related to the same OOM issues seen in trl with vLLM + GRPO
+    max_completion_length=192,
+    temperature=0.7,
+    top_p=0.95,
+    use_vllm=False,  # unsloth gradient checkpointing + vLLM causes instability with GRPO
 )
 
 
