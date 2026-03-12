@@ -87,7 +87,7 @@ training_args = GRPOConfig(
     learning_rate=5e-6,
     optim="adamw_8bit",
     weight_decay=0.01,
-    warmup_steps=100,  # replaced warmup_ratio (deprecated in v5.2)
+    warmup_steps=100,
     lr_scheduler_type="cosine",
     logging_steps=5,
     save_strategy="steps",
@@ -98,12 +98,9 @@ training_args = GRPOConfig(
     report_to="tensorboard",
     num_generations=4,
     max_prompt_length=256,
-    generation_kwargs=dict(
-        max_new_tokens=192,
-        temperature=0.7,
-        top_p=0.95,
-        do_sample=True,
-    ),
+    max_completion_length=192,
+    temperature=0.7,
+    top_p=0.95,
     use_vllm=False,
 )
 
