@@ -50,9 +50,24 @@ if not hasattr(model, "warnings_issued"):
 dataset = load_dataset("openai/gsm8k", "main", split="train")
 
 
+SYSTEM_PROMPT = """\
+<system>
+  <role>You are a mathematical reasoning assistant.</role>
+  <instructions>
+    <step>Think through the problem carefully inside &lt;think&gt;...&lt;/think&gt; tags.</step>
+    <step>Show your full step-by-step reasoning inside the think block.</step>
+    <step>Provide your final numeric answer inside \\boxed{{...}}.</step>
+  </instructions>
+  <format>
+    <think>step-by-step reasoning here</think>
+    \\boxed{{final answer}}
+  </format>
+</system>"""
+
+
 def formatting_prompts_func(examples):
     texts = [
-        f"Question: {q}\n\nLet's think step by step." for q in examples["question"]
+        f"{SYSTEM_PROMPT}\n\nQuestion: {q}" for q in examples["question"]
     ]
     return {
         "prompt": texts,
@@ -76,7 +91,17 @@ def accuracy_reward_func(completions, ground_truth, **kwargs):
 
 
 def format_reward_func(completions, **kwargs):
-    return [1.0 if "\\boxed{" in c and len(c) > 200 else 0.5 for c in completions]
+    rewards = []
+    for c in completions:
+        has_think = bool(re.search(r"<think>.*?</think>", c, re.DOTALL))
+        has_boxed = bool(re.search(r"\\\\boxed\{.*?\}", c, re.DOTALL))
+        if has_think and has_boxed:
+            rewards.append(1.0)
+        elif has_boxed:
+            rewards.append(0.5)
+        else:
+            rewards.append(0.0)
+    return rewards
 
 
 reward_funcs = [accuracy_reward_func, format_reward_func]
@@ -84,9 +109,9 @@ reward_funcs = [accuracy_reward_func, format_reward_func]
 training_args = GRPOConfig(
     output_dir="outputs/gsm8k_grpo_qwen4b",
     num_train_epochs=1,
-    per_device_train_batch_size=4,
+    per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
-    learning_rate=5e-6,
+    learning_rate=2e-4,
     optim="adamw_8bit",
     weight_decay=0.01,
     warmup_steps=100,
@@ -96,9 +121,9 @@ training_args = GRPOConfig(
     save_steps=200,
     max_steps=-1,
     report_to="tensorboard",
-    num_generations=4,
+    num_generations=8,
     max_prompt_length=256,
-    max_completion_length=192,
+    # max_completion_length=192, commenting this out to basically, the math problems need more tokens to think and solve
     temperature=0.7,
     top_p=0.95,
     use_vllm=False,
