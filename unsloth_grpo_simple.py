@@ -1,10 +1,10 @@
+from unsloth import FastLanguageModel, PatchFastRL, is_bfloat16_supported
 import re
 from typing import Optional
 
 import torch
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
-from unsloth import FastLanguageModel, PatchFastRL, is_bfloat16_supported
 
 PatchFastRL("GRPO", FastLanguageModel)
 
@@ -66,10 +66,10 @@ def extract_boxed_answer(text: str) -> Optional[str]:
     return m.group(1).strip() if m else None
 
 
-def accuracy_reward_func(completions, ground_truths, **kwargs):
+def accuracy_reward_func(completions, ground_truth, **kwargs):
     return [
         1.0 if extract_boxed_answer(c) == gt else 0.0
-        for c, gt in zip(completions, ground_truths)
+        for c, gt in zip(completions, ground_truth)
     ]
 
 
