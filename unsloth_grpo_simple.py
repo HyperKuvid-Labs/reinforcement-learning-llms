@@ -12,7 +12,7 @@ PatchFastRL("GRPO", FastLanguageModel)
 max_seq_length = 512
 dtype = None
 load_in_4bit = True
-model_name = "Qwen/Qwen3.5-4B"
+model_name = "Qwen/Qwen3-8B"
 
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=model_name,
