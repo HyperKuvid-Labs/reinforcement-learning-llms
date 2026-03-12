@@ -41,6 +41,10 @@ model = FastLanguageModel.get_peft_model(
     loftq_config=None,
 )
 
+# Fix for trl/peft compatibility: GRPOTrainer expects warnings_issued attribute
+if not hasattr(model, "warnings_issued"):
+    model.warnings_issued = {}
+
 dataset = load_dataset("openai/gsm8k", "main", split="train")
 
 
@@ -77,14 +81,13 @@ reward_funcs = [accuracy_reward_func, format_reward_func]
 
 training_args = GRPOConfig(
     output_dir="outputs/gsm8k_grpo_qwen4b",
-    logging_dir="outputs/gsm8k_grpo_qwen4b/tb_logs",
     num_train_epochs=1,
     per_device_train_batch_size=4,
     gradient_accumulation_steps=4,
     learning_rate=5e-6,
     optim="adamw_8bit",
     weight_decay=0.01,
-    warmup_ratio=0.1,
+    warmup_steps=100,  # replaced warmup_ratio (deprecated in v5.2)
     lr_scheduler_type="cosine",
     logging_steps=5,
     save_strategy="steps",
