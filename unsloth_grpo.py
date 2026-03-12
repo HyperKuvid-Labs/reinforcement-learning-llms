@@ -13,7 +13,7 @@ from unsloth import FastLanguageModel, PatchFastRL, is_bfloat16_supported
 
 from rich import box
 from rich.align import Align
-from rich.console import Console
+from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
@@ -38,14 +38,29 @@ load_in_4bit = True  # 4bit keeps memory low with barely any accuracy loss
 model_name = "Qwen/Qwen3-8B"
 
 
-# ─── Sparkline ────────────────────────────────────────────────────────────────
+# ─── Line graph (braille dots) ───────────────────────────────────────────────
 
-_SPARK = "▁▂▃▄▅▆▇█"
+# Braille dot → (col_offset, row_offset, bit)
+_BRAILLE_DOTS = [
+    (0, 0, 0x01),  # dot 1 – top-left
+    (0, 1, 0x02),  # dot 2
+    (0, 2, 0x04),  # dot 3
+    (1, 0, 0x08),  # dot 4 – top-right
+    (1, 1, 0x10),  # dot 5
+    (1, 2, 0x20),  # dot 6
+    (0, 3, 0x40),  # dot 7 – bottom-left
+    (1, 3, 0x80),  # dot 8 – bottom-right
+]
 
 
-class SparklineChart:
-    def __init__(self, width: int = 46, maxlen: int = 300) -> None:
-        self.width = width
+class LineGraph:
+    """Renders a historical metric as a braille line graph (multi-line Rich Text)."""
+
+    def __init__(
+        self, width: int = 46, height: int = 5, maxlen: int = 300
+    ) -> None:
+        self.width = width    # terminal characters wide
+        self.height = height  # terminal characters tall
         self.values: deque[float] = deque(maxlen=maxlen)
 
     def push(self, v: float) -> None:
@@ -59,15 +74,55 @@ class SparklineChart:
     def minimum(self) -> Optional[float]:
         return min(self.values) if self.values else None
 
-    def render(self, color: str = "cyan") -> Text:
+    def render(
+        self,
+        color: str = "cyan",
+        width: Optional[int] = None,
+        height: Optional[int] = None,
+    ) -> Text:
+        w = width if width is not None else self.width
+        h = height if height is not None else self.height
+        dot_w = w * 2   # pixel columns
+        dot_h = h * 4   # pixel rows
+
         if len(self.values) < 2:
-            return Text("─" * self.width, style="dim white")
-        pts = list(self.values)[-self.width :]
+            blank = ("⣀" * w + "\n") * (h - 1) + "⣀" * w
+            return Text(blank, style="dim white")
+
+        pts = list(self.values)[-dot_w:]
         lo, hi = min(pts), max(pts)
         span = (hi - lo) or 1e-9
-        chars = [_SPARK[int((v - lo) / span * (len(_SPARK) - 1))] for v in pts]
-        pad = self.width - len(chars)
-        return Text(" " * pad + "".join(chars), style=color)
+
+        def to_row(v: float) -> int:
+            return max(0, min(dot_h - 1, int((1.0 - (v - lo) / span) * (dot_h - 1))))
+
+        # Build boolean pixel grid (row-major, row 0 = top)
+        grid = [[False] * dot_w for _ in range(dot_h)]
+        x_off = max(0, dot_w - len(pts))
+        for i, v in enumerate(pts):
+            x = x_off + i
+            y = to_row(v)
+            grid[y][x] = True
+            if i > 0:
+                prev_y = to_row(pts[i - 1])
+                lo_y, hi_y = min(prev_y, y), max(prev_y, y)
+                for fy in range(lo_y, hi_y + 1):
+                    grid[fy][x] = True
+
+        # Encode pixel grid into braille characters
+        lines: list[str] = []
+        for cr in range(h):
+            row_chars: list[str] = []
+            for cc in range(w):
+                bits = 0
+                for dc, dr, bit in _BRAILLE_DOTS:
+                    px, py = cc * 2 + dc, cr * 4 + dr
+                    if px < dot_w and py < dot_h and grid[py][px]:
+                        bits |= bit
+                row_chars.append(chr(0x2800 + bits))
+            lines.append("".join(row_chars))
+
+        return Text("\n".join(lines), style=color)
 
 
 # ─── Shared training state ────────────────────────────────────────────────────
@@ -80,11 +135,11 @@ class TrainState:
         self.epoch: float = 0.0
         self.total_epochs: int = 1
 
-        self.loss = SparklineChart()
-        self.pg_loss = SparklineChart()
-        self.kl = SparklineChart()
-        self.reward = SparklineChart()
-        self.entropy = SparklineChart()
+        self.loss = LineGraph()
+        self.pg_loss = LineGraph()
+        self.kl = LineGraph()
+        self.reward = LineGraph()
+        self.entropy = LineGraph()
 
         # (step, accuracy) pairs logged from accuracy_reward_func
         self.accuracy_history: list[tuple[int, float]] = []
@@ -182,29 +237,48 @@ def _fmt(v: Optional[float], d: int = 5) -> str:
     return f"{v:.{d}f}" if v is not None else "—"
 
 
-def _metrics_table(s: TrainState) -> Table:
-    tbl = Table(
-        box=box.SIMPLE,
-        show_header=True,
-        header_style="bold bright_white",
-        expand=True,
-        pad_edge=False,
-    )
-    tbl.add_column("Metric", style="dim white", no_wrap=True, ratio=3)
-    tbl.add_column(
-        "Current", style="bright_cyan", no_wrap=True, ratio=2, justify="right"
-    )
-    tbl.add_column("Min", style="bright_yellow", no_wrap=True, ratio=2, justify="right")
-    tbl.add_column("Sparkline", no_wrap=True, ratio=6)
-    for label, chart, color in [
-        ("Loss", s.loss, "bright_red"),
-        ("PG Loss", s.pg_loss, "red"),
-        ("KL", s.kl, "magenta"),
-        ("Reward Mean", s.reward, "bright_green"),
-        ("Entropy", s.entropy, "yellow"),
-    ]:
-        tbl.add_row(label, _fmt(chart.latest), _fmt(chart.minimum), chart.render(color))
-    return tbl
+# Graph render width (chars) – wide enough to fill the metrics panel at typical 220-col terminals.
+_GRAPH_W = 72
+_GRAPH_H = 3  # braille rows per metric (= 12 dot-rows of resolution)
+
+
+def _metric_block(label: str, chart: LineGraph, color: str) -> Group:
+    """One metric: a summary line + a full-width braille line graph."""
+    # ── summary line ──────────────────────────────────────────────────────
+    cur = _fmt(chart.latest)
+    mn  = _fmt(chart.minimum)
+    hi_s = f"{max(chart.values):.4g}" if chart.values else "—"
+    lo_s = f"{chart.minimum:.4g}"     if chart.minimum is not None else "—"
+
+    summary = Text()
+    summary.append(f" {label:<13}", style="bold " + color)
+    summary.append(" cur ",  style="dim white")
+    summary.append(f"{cur}",  style="bright_cyan")
+    summary.append("  min ", style="dim white")
+    summary.append(f"{mn}",  style="bright_yellow")
+    summary.append(f"  ↑ {hi_s}  ↓ {lo_s}", style="dim white")
+
+    # ── graph ─────────────────────────────────────────────────────────────
+    graph = chart.render(color, width=_GRAPH_W, height=_GRAPH_H)
+
+    return Group(summary, graph)
+
+
+def _metrics_content(s: TrainState) -> Group:
+    """Stacks all five metric blocks separated by dim rules."""
+    metrics = [
+        ("Loss",        s.loss,    "bright_red"),
+        ("PG Loss",     s.pg_loss, "red"),
+        ("KL",          s.kl,      "magenta"),
+        ("Reward Mean", s.reward,  "bright_green"),
+        ("Entropy",     s.entropy, "yellow"),
+    ]
+    items: list = []
+    for i, (label, chart, color) in enumerate(metrics):
+        if i > 0:
+            items.append(Rule(style="dim blue"))
+        items.append(_metric_block(label, chart, color))
+    return Group(*items)
 
 
 def _accuracy_table(s: TrainState) -> Table:
@@ -268,7 +342,7 @@ def _build_ui(s: TrainState, prog: Progress) -> Layout:
             acc_title += f"  [bright_green]best {best * 100:.1f}%[/bright_green]"
 
         metrics_panel = Panel(
-            _metrics_table(s),
+            _metrics_content(s),
             title="[bold]live metrics[/bold]",
             border_style="blue",
             padding=(0, 1),
