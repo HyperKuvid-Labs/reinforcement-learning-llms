@@ -35,7 +35,7 @@ PatchFastRL("GRPO", FastLanguageModel)
 max_seq_length = 512  # shorter seqs for faster throughput
 dtype = None  # auto-detects bfloat16 on a100
 load_in_4bit = True  # 4bit keeps memory low with barely any accuracy loss
-model_name = "Qwen/Qwen3.5-4B-Instruct"
+model_name = "Qwen/Qwen3.5-4B"
 
 
 # ─── Sparkline ────────────────────────────────────────────────────────────────
