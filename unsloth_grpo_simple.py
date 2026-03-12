@@ -5,6 +5,7 @@ from typing import Optional
 import torch
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
+from transformers import AutoTokenizer
 
 PatchFastRL("GRPO", FastLanguageModel)
 
@@ -104,11 +105,17 @@ training_args = GRPOConfig(
     use_vllm=False,
 )
 
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
+
 trainer = GRPOTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
     reward_funcs=reward_funcs,
+    tokenizer=tokenizer,
 )
 
 trainer.train()
