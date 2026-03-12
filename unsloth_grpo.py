@@ -1,3 +1,4 @@
+from unsloth import FastLanguageModel, PatchFastRL, is_bfloat16_supported
 import re
 import threading
 import time
@@ -9,7 +10,6 @@ import torch
 from datasets import load_dataset
 from transformers import TrainerCallback, TrainerControl, TrainerState
 from trl import GRPOConfig, GRPOTrainer
-from unsloth import FastLanguageModel, PatchFastRL, is_bfloat16_supported
 
 from rich import box
 from rich.align import Align
