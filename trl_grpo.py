@@ -7,7 +7,13 @@ from typing import Optional
 import torch
 from datasets import load_dataset
 from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, TrainerCallback, TrainerControl, TrainerState
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    TrainerCallback,
+    TrainerControl,
+    TrainerState,
+)
 from trl import GRPOTrainer, GRPOConfig
 from trl.rewards import reasoning_accuracy_reward
 
@@ -17,8 +23,14 @@ from rich.console import Console
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
-from rich.progress import (BarColumn, Progress, SpinnerColumn,
-                           TaskProgressColumn, TextColumn, TimeElapsedColumn)
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
@@ -34,9 +46,10 @@ model_name = "Qwen/Qwen3.5-4B"
 
 _SPARK = "▁▂▃▄▅▆▇█"
 
+
 class SparklineChart:
     def __init__(self, width: int = 46, maxlen: int = 300) -> None:
-        self.width  = width
+        self.width = width
         self.values: deque[float] = deque(maxlen=maxlen)
 
     def push(self, v: float) -> None:
@@ -53,7 +66,7 @@ class SparklineChart:
     def render(self, color: str = "cyan") -> Text:
         if len(self.values) < 2:
             return Text("─" * self.width, style="dim white")
-        pts  = list(self.values)[-self.width:]
+        pts = list(self.values)[-self.width :]
         lo, hi = min(pts), max(pts)
         span = (hi - lo) or 1e-9
         chars = [_SPARK[int((v - lo) / span * (len(_SPARK) - 1))] for v in pts]
@@ -63,31 +76,33 @@ class SparklineChart:
 
 # ─── Shared training state ────────────────────────────────────────────────────
 
+
 class TrainState:
     def __init__(self) -> None:
-        self.step: int          = 0
-        self.max_steps: int     = 0
-        self.epoch: float       = 0.0
-        self.total_epochs: int  = 1
+        self.step: int = 0
+        self.max_steps: int = 0
+        self.epoch: float = 0.0
+        self.total_epochs: int = 1
 
-        self.loss        = SparklineChart()
-        self.pg_loss     = SparklineChart()
-        self.kl          = SparklineChart()
-        self.reward      = SparklineChart()
-        self.entropy     = SparklineChart()
+        self.loss = SparklineChart()
+        self.pg_loss = SparklineChart()
+        self.kl = SparklineChart()
+        self.reward = SparklineChart()
+        self.entropy = SparklineChart()
 
         # (step, accuracy) pairs from reasoning_accuracy_reward logs
         self.accuracy_history: list[tuple[int, float]] = []
 
-        self.status: str       = "initialising…"
-        self.done: bool        = False
-        self.elapsed: float    = 0.0
-        self.train_start: float = 0.0   # wall time when trainer.train() begins
-        self.train_end: float   = 0.0   # wall time when trainer.train() finishes
-        self.lock              = threading.Lock()
+        self.status: str = "initialising…"
+        self.done: bool = False
+        self.elapsed: float = 0.0
+        self.train_start: float = 0.0  # wall time when trainer.train() begins
+        self.train_end: float = 0.0  # wall time when trainer.train() finishes
+        self.lock = threading.Lock()
 
 
 # ─── Trainer callback ─────────────────────────────────────────────────────────
+
 
 class RichGRPOCallback(TrainerCallback):
     def __init__(self, ts: TrainState) -> None:
@@ -95,30 +110,40 @@ class RichGRPOCallback(TrainerCallback):
 
     def on_train_begin(self, args, state: TrainerState, control: TrainerControl, **kw):
         with self._s.lock:
-            self._s.max_steps    = state.max_steps or 0
+            self._s.max_steps = state.max_steps or 0
             self._s.total_epochs = int(args.num_train_epochs)
-            self._s.status       = "training"
-            self._s.train_start  = time.monotonic()
+            self._s.status = "training"
+            self._s.train_start = time.monotonic()
 
-    def on_log(self, args, state: TrainerState, control: TrainerControl, logs=None, **kw):
+    def on_log(
+        self, args, state: TrainerState, control: TrainerControl, logs=None, **kw
+    ):
         if not logs:
             return
         s = self._s
         with s.lock:
-            s.step  = state.global_step
+            s.step = state.global_step
             s.epoch = state.epoch
 
             for key in ("loss", "train_loss"):
-                if key in logs: s.loss.push(float(logs[key])); break
+                if key in logs:
+                    s.loss.push(float(logs[key]))
+                    break
 
             for key in ("pg_loss", "policy_loss", "actor/pg_loss"):
-                if key in logs: s.pg_loss.push(float(logs[key])); break
+                if key in logs:
+                    s.pg_loss.push(float(logs[key]))
+                    break
 
             for key in ("kl", "kl_loss", "actor/kl"):
-                if key in logs: s.kl.push(float(logs[key])); break
+                if key in logs:
+                    s.kl.push(float(logs[key]))
+                    break
 
             for key in ("entropy", "actor/entropy"):
-                if key in logs: s.entropy.push(float(logs[key])); break
+                if key in logs:
+                    s.entropy.push(float(logs[key]))
+                    break
 
             # reward: prefer mean key, fall back to first reward key found
             reward_keys = [k for k in logs if "reward" in k.lower()]
@@ -127,8 +152,12 @@ class RichGRPOCallback(TrainerCallback):
                 s.reward.push(float(logs[key]))
 
             # accuracy from reasoning_accuracy_reward
-            for key in ("rewards/reasoning_accuracy_reward", "reasoning_accuracy_reward",
-                        "reward/accuracy", "accuracy"):
+            for key in (
+                "rewards/reasoning_accuracy_reward",
+                "reasoning_accuracy_reward",
+                "reward/accuracy",
+                "accuracy",
+            ):
                 if key in logs:
                     s.accuracy_history.append((state.global_step, float(logs[key])))
                     break
@@ -144,45 +173,61 @@ class RichGRPOCallback(TrainerCallback):
     def on_train_end(self, args, state: TrainerState, control: TrainerControl, **kw):
         with self._s.lock:
             self._s.train_end = time.monotonic()
-            self._s.done      = True
-            self._s.status    = "done"
+            self._s.done = True
+            self._s.status = "done"
 
 
 # ─── TUI renderer ─────────────────────────────────────────────────────────────
+
 
 def _fmt(v: Optional[float], d: int = 5) -> str:
     return f"{v:.{d}f}" if v is not None else "—"
 
 
 def _metrics_table(s: TrainState) -> Table:
-    tbl = Table(box=box.SIMPLE, show_header=True, header_style="bold bright_white",
-                expand=True, pad_edge=False)
-    tbl.add_column("Metric",  style="dim white",     no_wrap=True, ratio=3)
-    tbl.add_column("Current", style="bright_cyan",   no_wrap=True, ratio=2, justify="right")
-    tbl.add_column("Min",     style="bright_yellow", no_wrap=True, ratio=2, justify="right")
-    tbl.add_column("Sparkline",                      no_wrap=True, ratio=6)
+    tbl = Table(
+        box=box.SIMPLE,
+        show_header=True,
+        header_style="bold bright_white",
+        expand=True,
+        pad_edge=False,
+    )
+    tbl.add_column("Metric", style="dim white", no_wrap=True, ratio=3)
+    tbl.add_column(
+        "Current", style="bright_cyan", no_wrap=True, ratio=2, justify="right"
+    )
+    tbl.add_column("Min", style="bright_yellow", no_wrap=True, ratio=2, justify="right")
+    tbl.add_column("Sparkline", no_wrap=True, ratio=6)
     for label, chart, color in [
-        ("Loss",        s.loss,    "bright_red"),
-        ("PG Loss",     s.pg_loss, "red"),
-        ("KL",          s.kl,      "magenta"),
-        ("Reward Mean", s.reward,  "bright_green"),
-        ("Entropy",     s.entropy, "yellow"),
+        ("Loss", s.loss, "bright_red"),
+        ("PG Loss", s.pg_loss, "red"),
+        ("KL", s.kl, "magenta"),
+        ("Reward Mean", s.reward, "bright_green"),
+        ("Entropy", s.entropy, "yellow"),
     ]:
         tbl.add_row(label, _fmt(chart.latest), _fmt(chart.minimum), chart.render(color))
     return tbl
 
 
 def _accuracy_table(s: TrainState) -> Table:
-    tbl = Table(box=box.SIMPLE, show_header=True, header_style="bold bright_white",
-                expand=True, pad_edge=False)
-    tbl.add_column("Step",     style="dim white",    no_wrap=True, justify="right")
+    tbl = Table(
+        box=box.SIMPLE,
+        show_header=True,
+        header_style="bold bright_white",
+        expand=True,
+        pad_edge=False,
+    )
+    tbl.add_column("Step", style="dim white", no_wrap=True, justify="right")
     tbl.add_column("Accuracy", style="bright_green", no_wrap=True, justify="center")
-    tbl.add_column("Bar",      no_wrap=False)
+    tbl.add_column("Bar", no_wrap=False)
     for step, acc in s.accuracy_history[-8:]:
-        color  = "bright_green" if acc >= 0.7 else "yellow" if acc >= 0.4 else "red"
+        color = "bright_green" if acc >= 0.7 else "yellow" if acc >= 0.4 else "red"
         filled = int(acc * 20)
-        tbl.add_row(str(step), f"{acc*100:.1f}%",
-                    Text("█" * filled + "░" * (20 - filled), style=color))
+        tbl.add_row(
+            str(step),
+            f"{acc * 100:.1f}%",
+            Text("█" * filled + "░" * (20 - filled), style=color),
+        )
     if not s.accuracy_history:
         tbl.add_row("—", "awaiting logs…", Text(""))
     return tbl
@@ -190,11 +235,11 @@ def _accuracy_table(s: TrainState) -> Table:
 
 def _build_ui(s: TrainState, prog: Progress) -> Layout:
     with s.lock:
-        step, total   = s.step, s.max_steps
-        elapsed       = str(timedelta(seconds=int(s.elapsed)))
-        epoch_str     = f"{s.epoch:.2f} / {s.total_epochs}"
-        status_col    = "bright_cyan" if s.status == "training" else "yellow"
-        best          = max((a for _, a in s.accuracy_history), default=None)
+        step, total = s.step, s.max_steps
+        elapsed = str(timedelta(seconds=int(s.elapsed)))
+        epoch_str = f"{s.epoch:.2f} / {s.total_epochs}"
+        status_col = "bright_cyan" if s.status == "training" else "yellow"
+        best = max((a for _, a in s.accuracy_history), default=None)
         sps_str = ""
         if s.train_start > 0 and s.step > 0:
             dt = time.monotonic() - s.train_start
@@ -202,36 +247,46 @@ def _build_ui(s: TrainState, prog: Progress) -> Layout:
                 sps_str = f"  ·  {s.step / dt:.2f} steps/sec"
 
         hdr = Table(box=None, expand=True, show_header=False, pad_edge=False)
-        hdr.add_column(ratio=4); hdr.add_column(ratio=2)
-        hdr.add_column(ratio=2); hdr.add_column(ratio=2)
+        hdr.add_column(ratio=4)
+        hdr.add_column(ratio=2)
+        hdr.add_column(ratio=2)
+        hdr.add_column(ratio=2)
         hdr.add_row(
             Text(f"  {model_name}", style="bold bright_white"),
             Text(f"step  {step:>5} / {total or '?'}", style="cyan"),
             Text(f"epoch  {epoch_str}", style="cyan"),
             Text(f"  {s.status}", style=status_col),
         )
-        header = Panel(hdr, border_style="bright_blue",
-                       title="[bold bright_blue]TRL GRPO · GSM8K · vLLM[/bold bright_blue]",
-                       subtitle=f"[dim]elapsed {elapsed}{sps_str}[/dim]")
+        header = Panel(
+            hdr,
+            border_style="bright_blue",
+            title="[bold bright_blue]TRL GRPO · GSM8K · vLLM[/bold bright_blue]",
+            subtitle=f"[dim]elapsed {elapsed}{sps_str}[/dim]",
+        )
 
         acc_title = "[bold]accuracy reward[/bold]"
         if best is not None:
-            acc_title += f"  [bright_green]best {best*100:.1f}%[/bright_green]"
+            acc_title += f"  [bright_green]best {best * 100:.1f}%[/bright_green]"
 
-        metrics_panel  = Panel(_metrics_table(s),  title="[bold]live metrics[/bold]",
-                               border_style="blue",  padding=(0, 1))
-        accuracy_panel = Panel(_accuracy_table(s), title=acc_title,
-                               border_style="green", padding=(0, 1))
-        prog_panel     = Panel(prog, border_style="dim", padding=(0, 1))
+        metrics_panel = Panel(
+            _metrics_table(s),
+            title="[bold]live metrics[/bold]",
+            border_style="blue",
+            padding=(0, 1),
+        )
+        accuracy_panel = Panel(
+            _accuracy_table(s), title=acc_title, border_style="green", padding=(0, 1)
+        )
+        prog_panel = Panel(prog, border_style="dim", padding=(0, 1))
 
     layout = Layout()
     layout.split_column(
-        Layout(header,        name="header",   size=5),
-        Layout(name="body",  ratio=1),
-        Layout(prog_panel,    name="progress", size=4),
+        Layout(header, name="header", size=5),
+        Layout(name="body", ratio=1),
+        Layout(prog_panel, name="progress", size=4),
     )
     layout["body"].split_row(
-        Layout(metrics_panel,  name="metrics",  ratio=3),
+        Layout(metrics_panel, name="metrics", ratio=3),
         Layout(accuracy_panel, name="accuracy", ratio=2),
     )
     return layout
@@ -242,8 +297,12 @@ def _live_loop(s: TrainState, prog: Progress, task_id, console: Console) -> None
         while True:
             with s.lock:
                 step, total, done = s.step, s.max_steps, s.done
-            prog.update(task_id, completed=step, total=total or 1,
-                        description=f"step {step}/{total or '?'}")
+            prog.update(
+                task_id,
+                completed=step,
+                total=total or 1,
+                description=f"step {step}/{total or '?'}",
+            )
             live.update(_build_ui(s, prog))
             if done:
                 live.update(_build_ui(s, prog))
@@ -252,45 +311,56 @@ def _live_loop(s: TrainState, prog: Progress, task_id, console: Console) -> None
 
 
 def _print_summary(
-    s: TrainState, console: Console,
-    t0: float, t_model: float, t_data: float, t_save: float,
+    s: TrainState,
+    console: Console,
+    t0: float,
+    t_model: float,
+    t_data: float,
+    t_save: float,
 ) -> None:
     def _dur(a: float, b: float) -> str:
         return str(timedelta(seconds=int(b - a))) if b > a else "—"
 
     console.print()
     console.print(Rule("[bold bright_blue]Training Complete[/bold bright_blue]"))
-    tbl = Table(box=box.ROUNDED, show_header=False, expand=False,
-                border_style="blue", padding=(0, 2))
-    tbl.add_column(style="dim white",    no_wrap=True)
+    tbl = Table(
+        box=box.ROUNDED,
+        show_header=False,
+        expand=False,
+        border_style="blue",
+        padding=(0, 2),
+    )
+    tbl.add_column(style="dim white", no_wrap=True)
     tbl.add_column(style="bright_white", no_wrap=True)
 
-    tbl.add_row("Model",       model_name)
+    tbl.add_row("Model", model_name)
     tbl.add_row("Total steps", str(s.step))
 
     # ── timing breakdown ──────────────────────────────────────────────────
     tbl.add_row("", "")
-    tbl.add_row("Model load + LoRA",  _dur(t0,      t_model))
-    tbl.add_row("Dataset prep",       _dur(t_model, t_data))
-    tbl.add_row("vLLM init",          _dur(t_data,  t_vllm))
+    tbl.add_row("Model load + LoRA", _dur(t0, t_model))
+    tbl.add_row("Dataset prep", _dur(t_model, t_data))
+    # tbl.add_row("vLLM init",          _dur(t_data,  t_vllm))
     if s.train_start > 0:
         t_end = s.train_end if s.train_end > s.train_start else t_save
-        tbl.add_row("Training loop",  _dur(s.train_start, t_end))
-    tbl.add_row("Total wall time",    _dur(t0, t_save))
+        tbl.add_row("Training loop", _dur(s.train_start, t_end))
+    tbl.add_row("Total wall time", _dur(t0, t_save))
     if s.train_start > 0 and s.train_end > s.train_start and s.step > 0:
         sps = s.step / (s.train_end - s.train_start)
-        tbl.add_row("Avg steps/sec",  f"{sps:.3f}")
-        tbl.add_row("Avg sec/step",   f"{1/sps:.2f}s")
+        tbl.add_row("Avg steps/sec", f"{sps:.3f}")
+        tbl.add_row("Avg sec/step", f"{1 / sps:.2f}s")
 
     # ── metrics ───────────────────────────────────────────────────────────
     tbl.add_row("", "")
-    if s.loss.minimum  is not None: tbl.add_row("Best loss",    _fmt(s.loss.minimum))
-    if s.reward.latest is not None: tbl.add_row("Final reward", _fmt(s.reward.latest))
+    if s.loss.minimum is not None:
+        tbl.add_row("Best loss", _fmt(s.loss.minimum))
+    if s.reward.latest is not None:
+        tbl.add_row("Final reward", _fmt(s.reward.latest))
     if s.accuracy_history:
         best_step, best_acc = max(s.accuracy_history, key=lambda x: x[1])
         last_step, last_acc = s.accuracy_history[-1]
-        tbl.add_row("Best accuracy",  f"{best_acc*100:.2f}%  (step {best_step})")
-        tbl.add_row("Final accuracy", f"{last_acc*100:.2f}%  (step {last_step})")
+        tbl.add_row("Best accuracy", f"{best_acc * 100:.2f}%  (step {best_step})")
+        tbl.add_row("Final accuracy", f"{last_acc * 100:.2f}%  (step {last_step})")
     else:
         tbl.add_row("Accuracy", "no accuracy logs recorded")
     console.print(Align.center(tbl))
@@ -299,20 +369,22 @@ def _print_summary(
 
 # ─── Dataset ──────────────────────────────────────────────────────────────────
 
-_t0 = time.monotonic()   # script start — for cross-run comparison
+_t0 = time.monotonic()  # script start — for cross-run comparison
 
 ds = load_dataset("gsm8k", "main", split="train")
+
 
 def process(example):
     solution = example["answer"].split("#### ")[-1].strip()
     return {
-        "prompt":   f"Question: {example['question']}\n\nLet's think step by step. "
-                    f"Put the final answer within \\boxed{{{solution}}}.",
+        "prompt": f"Question: {example['question']}\n\nLet's think step by step. "
+        f"Put the final answer within \\boxed{{{solution}}}.",
         "solution": solution,
     }
 
-dataset = ds.map(process, num_proc=4)
-_t_data = time.monotonic()   # dataset ready
+
+dataset = ds.map(process)
+_t_data = time.monotonic()  # dataset ready
 
 
 # ─── vLLM + LoRA + config ─────────────────────────────────────────────────────
@@ -353,17 +425,17 @@ training_args = GRPOConfig(
     save_steps=500,
     report_to="tensorboard",
     use_vllm=True,
-    vllm_mode="colocate"
+    vllm_mode="colocate",
 )
 
-model     = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
+model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-_t_model = time.monotonic()   # model + tokenizer loaded
+_t_model = time.monotonic()  # model + tokenizer loaded
 
 
 # ─── Wire up TUI and train ────────────────────────────────────────────────────
 
-_console   = Console()
+_console = Console()
 _tui_state = TrainState()
 
 _progress = Progress(
@@ -377,13 +449,15 @@ _progress = Progress(
 )
 _task_id = _progress.add_task("training", total=1)
 _rich_cb = RichGRPOCallback(_tui_state)
-_start   = time.monotonic()
+_start = time.monotonic()
+
 
 def _tick():
     while not _tui_state.done:
         _tui_state.elapsed = time.monotonic() - _start
         time.sleep(0.1)
     _tui_state.elapsed = time.monotonic() - _start
+
 
 threading.Thread(target=_tick, daemon=True).start()
 
@@ -403,7 +477,7 @@ trainer = GRPOTrainer(
 )
 
 trainer.train()
-_t_saved = time.monotonic()   # (trl saves inside train(); capture wall time here)
+_t_saved = time.monotonic()  # (trl saves inside train(); capture wall time here)
 
 _live_t.join(timeout=3)
 _print_summary(_tui_state, _console, _t0, _t_model, _t_data, _t_saved)
