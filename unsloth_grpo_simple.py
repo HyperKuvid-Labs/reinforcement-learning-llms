@@ -18,7 +18,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     model_name=model_name,
     max_seq_length=max_seq_length,
     dtype=dtype,
-    load_in_4bit=load_in_4bit,
+    load_in_4bit=False,  # ← set to False to avoid conflict with load_in_16bit
+    load_in_16bit=True,
 )
 
 model = FastLanguageModel.get_peft_model(
@@ -113,7 +114,7 @@ trainer = GRPOTrainer(
     args=training_args,
     train_dataset=dataset,
     reward_funcs=reward_funcs,
-    tokenizer=tokenizer,
+    # tokenizer=tokenizer,
 )
 
 trainer.train()
