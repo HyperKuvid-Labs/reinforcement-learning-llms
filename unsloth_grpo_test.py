@@ -146,11 +146,24 @@ class EvalState:
         self.total = total
         self.step = 0
         self.correct = 0
+        self.status = "starting"
         self.done = False
         self.started = time.monotonic()
         self.elapsed = 0.0
+        self.current_index = -1
+        self.current_question = ""
+        self.current_ground_truth = ""
+        self.current_rollout = ""
+        self.current_prediction: Optional[str] = None
+        self.current_correct: Optional[bool] = None
         self.recent: deque[dict] = deque(maxlen=8)
         self.lock = threading.Lock()
+
+
+def _clip(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)] + "…"
 
 
 def _build_recent_table(state: EvalState) -> Table:
@@ -178,12 +191,59 @@ def _build_recent_table(state: EvalState) -> Table:
     return table
 
 
+def _build_rollout_panel(state: EvalState) -> Panel:
+    with state.lock:
+        idx = state.current_index
+        question = state.current_question
+        rollout = state.current_rollout
+
+    question_text = Text()
+    question_text.append("Q: ", style="bold bright_white")
+    question_text.append(_clip(question, 260) if question else "awaiting sample...", style="white")
+
+    rollout_text = Text()
+    rollout_text.append("\n\nRollout:\n", style="bold bright_cyan")
+    rollout_text.append(rollout if rollout else "waiting for generation...", style="cyan")
+
+    body = Text.assemble(question_text, rollout_text)
+    title = f"[bold]current rollout[/bold]  [dim]sample {idx if idx >= 0 else '—'}[/dim]"
+    return Panel(body, title=title, border_style="bright_blue", padding=(1, 1))
+
+
+def _build_prediction_panel(state: EvalState) -> Panel:
+    with state.lock:
+        gt = state.current_ground_truth
+        pred = state.current_prediction
+        correct = state.current_correct
+        status = state.status
+
+    verdict = "—"
+    verdict_style = "yellow"
+    if correct is True:
+        verdict = "✓ Correct"
+        verdict_style = "bright_green"
+    elif correct is False:
+        verdict = "✗ Incorrect"
+        verdict_style = "bright_red"
+
+    tbl = Table(box=box.SIMPLE, show_header=False, expand=True, pad_edge=False)
+    tbl.add_column(style="dim", ratio=2)
+    tbl.add_column(style="white", ratio=5)
+    tbl.add_row("Status", Text(status, style="bright_yellow"))
+    tbl.add_row("GT", Text(gt if gt else "—", style="bright_white"))
+    tbl.add_row("Pred", Text(pred if pred else "—", style="bright_cyan"))
+    tbl.add_row("Result", Text(verdict, style=verdict_style))
+
+    return Panel(tbl, title="[bold]prediction[/bold]", border_style="green", padding=(1, 1))
+
+
 def _build_ui(state: EvalState, progress: Progress) -> Layout:
     with state.lock:
         step = state.step
         total = state.total
         correct = state.correct
         elapsed = timedelta(seconds=int(state.elapsed))
+        status = state.status
 
     accuracy = (correct / step) if step > 0 else 0.0
     speed = (step / state.elapsed) if state.elapsed > 0 else 0.0
@@ -199,6 +259,12 @@ def _build_ui(state: EvalState, progress: Progress) -> Layout:
         Text(f"acc {accuracy * 100:.2f}%", style="bright_green"),
         Text(f"speed {speed:.2f}/s", style="yellow"),
     )
+    summary.add_row(
+        Text("", style="white"),
+        Text(f"status {status}", style="bright_yellow"),
+        Text(f"correct {correct}", style="bright_green"),
+        Text(f"wrong {max(0, step - correct)}", style="bright_red"),
+    )
 
     header = Panel(
         summary,
@@ -206,21 +272,27 @@ def _build_ui(state: EvalState, progress: Progress) -> Layout:
         subtitle=f"[dim]elapsed {elapsed}[/dim]",
     )
 
-    with state.lock:
-        recent_panel = Panel(
-            _build_recent_table(state),
-            title="[bold]recent predictions[/bold]",
-            border_style="blue",
-            padding=(0, 1),
-        )
+    rollout_panel = _build_rollout_panel(state)
+    prediction_panel = _build_prediction_panel(state)
+    recent_panel = Panel(
+        _build_recent_table(state),
+        title="[bold]recent predictions[/bold]",
+        border_style="magenta",
+        padding=(0, 1),
+    )
 
     progress_panel = Panel(progress, border_style="dim", padding=(0, 1))
 
     layout = Layout()
     layout.split_column(
         Layout(header, size=5),
-        Layout(recent_panel, ratio=1),
+        Layout(name="body", ratio=3),
+        Layout(recent_panel, ratio=2),
         Layout(progress_panel, size=4),
+    )
+    layout["body"].split_row(
+        Layout(rollout_panel, ratio=3),
+        Layout(prediction_panel, ratio=2),
     )
     return layout
 
@@ -303,6 +375,15 @@ def main() -> None:
         question = sample["question"]
         ground_truth = extract_ground_truth(sample["answer"])
 
+        with state.lock:
+            state.current_index = idx
+            state.current_question = question
+            state.current_ground_truth = ground_truth
+            state.current_rollout = ""
+            state.current_prediction = None
+            state.current_correct = None
+            state.status = "generating"
+
         prompt = build_prompt(question)
         inputs = tokenizer(prompt, return_tensors="pt")
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
@@ -346,6 +427,10 @@ def main() -> None:
         with state.lock:
             state.step = idx + 1
             state.correct = exact_correct
+            state.current_rollout = completion
+            state.current_prediction = pred_answer
+            state.current_correct = is_correct
+            state.status = "evaluating"
             state.recent.append(
                 {
                     "index": idx,
@@ -358,6 +443,7 @@ def main() -> None:
     exact_acc = exact_correct / total if total else 0.0
 
     with state.lock:
+        state.status = "done"
         state.done = True
 
     live_thread.join(timeout=3)
