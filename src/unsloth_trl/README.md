@@ -140,9 +140,9 @@ unsloth_trl/
 
 ![Completion Length](plots/completion_length_tb.png)
 
-### Forward Reward Mean
+### Format (r_mean)
 
-![Forward Reward Mean](plots/forward_r_mean_tb.png)
+![Format Reward Mean](plots/format_r_mean_tb.png)
 
 ### Gradient Norm
 
