@@ -1,11 +1,30 @@
 import argparse
 import json
 import re
+import threading
+import time
+from collections import deque
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 
 import torch
 from datasets import load_dataset
+from rich import box
+from rich.console import Console
+from rich.layout import Layout
+from rich.live import Live
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TaskProgressColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.table import Table
+from rich.text import Text
 from unsloth import FastLanguageModel, is_bfloat16_supported
 
 
@@ -91,6 +110,17 @@ def extract_boxed_answer(text: str) -> Optional[str]:
     return match.group(1).strip() if match else None
 
 
+def extract_prediction_answer(text: str) -> Optional[str]:
+    boxed = extract_boxed_answer(text)
+    if boxed is not None:
+        return boxed
+
+    number_matches = re.findall(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?", text)
+    if number_matches:
+        return number_matches[-1]
+    return None
+
+
 def extract_ground_truth(answer: str) -> str:
     return answer.split("####")[-1].strip()
 
@@ -109,6 +139,113 @@ def normalize_answer(answer: Optional[str]) -> str:
 
 def build_prompt(question: str) -> str:
     return f"{SYSTEM_PROMPT}\n\nQuestion: {question}"
+
+
+class EvalState:
+    def __init__(self, total: int) -> None:
+        self.total = total
+        self.step = 0
+        self.correct = 0
+        self.done = False
+        self.started = time.monotonic()
+        self.elapsed = 0.0
+        self.recent: deque[dict] = deque(maxlen=8)
+        self.lock = threading.Lock()
+
+
+def _build_recent_table(state: EvalState) -> Table:
+    table = Table(
+        box=box.SIMPLE,
+        show_header=True,
+        header_style="bold bright_white",
+        expand=True,
+        pad_edge=False,
+    )
+    table.add_column("Idx", justify="right", style="dim")
+    table.add_column("GT", style="bright_white")
+    table.add_column("Pred", style="cyan")
+    table.add_column("Correct", justify="center")
+    for row in state.recent:
+        ok_style = "bright_green" if row["correct"] else "red"
+        table.add_row(
+            str(row["index"]),
+            row["ground_truth"],
+            row["prediction"] if row["prediction"] is not None else "—",
+            Text("✓" if row["correct"] else "✗", style=ok_style),
+        )
+    if not state.recent:
+        table.add_row("—", "awaiting", "awaiting", "—")
+    return table
+
+
+def _build_ui(state: EvalState, progress: Progress) -> Layout:
+    with state.lock:
+        step = state.step
+        total = state.total
+        correct = state.correct
+        elapsed = timedelta(seconds=int(state.elapsed))
+
+    accuracy = (correct / step) if step > 0 else 0.0
+    speed = (step / state.elapsed) if state.elapsed > 0 else 0.0
+
+    summary = Table(box=None, show_header=False, expand=True, pad_edge=False)
+    summary.add_column(ratio=3)
+    summary.add_column(ratio=2)
+    summary.add_column(ratio=2)
+    summary.add_column(ratio=2)
+    summary.add_row(
+        Text("GSM8K Evaluation · Unsloth GRPO", style="bold bright_white"),
+        Text(f"sample {step}/{total}", style="cyan"),
+        Text(f"acc {accuracy * 100:.2f}%", style="bright_green"),
+        Text(f"speed {speed:.2f}/s", style="yellow"),
+    )
+
+    header = Panel(
+        summary,
+        border_style="bright_blue",
+        subtitle=f"[dim]elapsed {elapsed}[/dim]",
+    )
+
+    with state.lock:
+        recent_panel = Panel(
+            _build_recent_table(state),
+            title="[bold]recent predictions[/bold]",
+            border_style="blue",
+            padding=(0, 1),
+        )
+
+    progress_panel = Panel(progress, border_style="dim", padding=(0, 1))
+
+    layout = Layout()
+    layout.split_column(
+        Layout(header, size=5),
+        Layout(recent_panel, ratio=1),
+        Layout(progress_panel, size=4),
+    )
+    return layout
+
+
+def _live_loop(state: EvalState, progress: Progress, task_id: int, console: Console) -> None:
+    with Live(console=console, refresh_per_second=4, screen=True) as live:
+        while True:
+            with state.lock:
+                state.elapsed = time.monotonic() - state.started
+                step = state.step
+                total = state.total
+                done = state.done
+
+            progress.update(
+                task_id,
+                completed=step,
+                total=max(1, total),
+                description=f"evaluating {step}/{total}",
+            )
+            live.update(_build_ui(state, progress))
+
+            if done:
+                live.update(_build_ui(state, progress))
+                break
+            time.sleep(0.25)
 
 
 def main() -> None:
@@ -138,13 +275,29 @@ def main() -> None:
 
     total = len(dataset)
     exact_correct = 0
-    format_ok = 0
-    boxed_found = 0
 
     rows = []
 
-    print(f"Evaluating {total} samples from GSM8K/{args.split}")
-    print(f"Model path: {args.model_path}")
+    console = Console()
+    state = EvalState(total=total)
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[bold cyan]{task.description}"),
+        BarColumn(bar_width=None),
+        TaskProgressColumn(),
+        TimeElapsedColumn(),
+        console=console,
+        expand=True,
+    )
+    task_id = progress.add_task("evaluating", total=max(1, total))
+
+    live_thread = threading.Thread(
+        target=_live_loop,
+        args=(state, progress, task_id, console),
+        daemon=True,
+    )
+    live_thread.start()
 
     for idx, sample in enumerate(dataset):
         question = sample["question"]
@@ -155,31 +308,25 @@ def main() -> None:
         inputs = {k: v.to(model.device) for k, v in inputs.items()}
 
         do_sample = args.temperature > 0.0
+        gen_kwargs = {
+            "max_new_tokens": args.max_new_tokens,
+            "do_sample": do_sample,
+            "pad_token_id": tokenizer.pad_token_id,
+            "eos_token_id": tokenizer.eos_token_id,
+        }
+        if do_sample:
+            gen_kwargs["temperature"] = args.temperature
+            gen_kwargs["top_p"] = args.top_p
+
         with torch.inference_mode():
-            output_ids = model.generate(
-                **inputs,
-                max_new_tokens=args.max_new_tokens,
-                do_sample=do_sample,
-                temperature=args.temperature if do_sample else None,
-                top_p=args.top_p if do_sample else None,
-                pad_token_id=tokenizer.pad_token_id,
-                eos_token_id=tokenizer.eos_token_id,
-            )
+            output_ids = model.generate(**inputs, **gen_kwargs)
 
         completion_ids = output_ids[0][inputs["input_ids"].shape[1] :]
         completion = tokenizer.decode(completion_ids, skip_special_tokens=True)
 
-        pred_boxed = extract_boxed_answer(completion)
+        pred_answer = extract_prediction_answer(completion)
         gt_norm = normalize_answer(ground_truth)
-        pred_norm = normalize_answer(pred_boxed)
-
-        has_think = bool(re.search(r"<think>.*?</think>", completion, re.DOTALL))
-        has_boxed = pred_boxed is not None
-
-        if has_boxed:
-            boxed_found += 1
-        if has_think and has_boxed:
-            format_ok += 1
+        pred_norm = normalize_answer(pred_answer)
 
         is_correct = pred_norm == gt_norm and pred_norm != ""
         if is_correct:
@@ -190,36 +337,40 @@ def main() -> None:
                 "index": idx,
                 "question": question,
                 "ground_truth": ground_truth,
-                "prediction_boxed": pred_boxed,
+                "prediction": pred_answer,
                 "prediction_text": completion,
                 "correct": is_correct,
-                "has_think": has_think,
-                "has_boxed": has_boxed,
             }
         )
 
-        if (idx + 1) % 20 == 0 or (idx + 1) == total:
-            running_acc = exact_correct / (idx + 1)
-            print(
-                f"[{idx + 1:>5}/{total}] exact={running_acc:.4f} "
-                f"boxed={boxed_found/(idx + 1):.4f} format={format_ok/(idx + 1):.4f}"
+        with state.lock:
+            state.step = idx + 1
+            state.correct = exact_correct
+            state.recent.append(
+                {
+                    "index": idx,
+                    "ground_truth": ground_truth,
+                    "prediction": pred_answer,
+                    "correct": is_correct,
+                }
             )
 
     exact_acc = exact_correct / total if total else 0.0
-    boxed_rate = boxed_found / total if total else 0.0
-    format_rate = format_ok / total if total else 0.0
+
+    with state.lock:
+        state.done = True
+
+    live_thread.join(timeout=3)
 
     print("\n=== Evaluation Summary ===")
     print(f"Samples:         {total}")
     print(f"Exact Match:     {exact_acc:.4f} ({exact_correct}/{total})")
-    print(f"Boxed Found:     {boxed_rate:.4f} ({boxed_found}/{total})")
-    print(f"Format Success:  {format_rate:.4f} ({format_ok}/{total})")
 
     print("\n=== Example Predictions (first 5) ===")
     for row in rows[:5]:
         print(f"\n[{row['index']}] Q: {row['question']}")
         print(f"GT:   {row['ground_truth']}")
-        print(f"PRED: {row['prediction_boxed']}")
+        print(f"PRED: {row['prediction']}")
         print(f"OK:   {row['correct']}")
 
     if args.save_json:
@@ -230,8 +381,6 @@ def main() -> None:
             "split": args.split,
             "samples": total,
             "exact_match": exact_acc,
-            "boxed_rate": boxed_rate,
-            "format_success_rate": format_rate,
             "rows": rows,
         }
         out_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False))
