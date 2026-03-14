@@ -118,7 +118,7 @@ unsloth_trl/
 
 ## Training and Evaluation Images
 
-### Evaluation Snapshot
+### Evaluation Snapshot : 93.50 (187/200)
 
 ![Evaluation](images/eval.png)
 
