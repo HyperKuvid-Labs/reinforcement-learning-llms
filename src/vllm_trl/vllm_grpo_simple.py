@@ -20,7 +20,7 @@ from trl import GRPOConfig, GRPOTrainer
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-model_name = "Qwen/Qwen3.5-4B"
+model_name = "Qwen/Qwen3-8B"
 
 SYSTEM_PROMPT = """\
 <system>
