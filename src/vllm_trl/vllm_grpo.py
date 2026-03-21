@@ -42,7 +42,7 @@ from rich.text import Text
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-model_name = "Qwen/Qwen3.5-4B"
+model_name = "Qwen/Qwen3-8B"
 
 SYSTEM_PROMPT = """\
 <system>
@@ -603,12 +603,6 @@ training_args = GRPOConfig(
     bf16=True,
     tf32=True,
     num_generations=8,
-    generation_kwargs={
-        "max_new_tokens": 128,
-        "temperature": 0.7,
-        "top_p": 0.9,
-        "do_sample": True,
-    },
     logging_steps=5,
     save_steps=200,
     report_to="tensorboard",

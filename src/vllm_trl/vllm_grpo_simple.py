@@ -203,12 +203,6 @@ def main() -> None:
 		bf16=True,
 		tf32=True,
 		num_generations=8,
-		generation_kwargs={
-			"max_new_tokens": 128,
-			"temperature": 0.7,
-			"top_p": 0.9,
-			"do_sample": True,
-		},
 		logging_steps=5,
 		save_steps=200,
 		report_to="tensorboard",
