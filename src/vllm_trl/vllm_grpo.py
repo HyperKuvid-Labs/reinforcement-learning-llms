@@ -615,7 +615,7 @@ training_args = GRPOConfig(
     use_vllm=True,
     vllm_mode="colocate",
     temperature=0.7,
-    max_prompt_length=256,
+    # max_prompt_length=256,
     num_completions_to_print=8,
     top_p=0.95,
 )
