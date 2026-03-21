@@ -3,6 +3,8 @@ import time
 from collections import deque
 from datetime import timedelta
 from typing import Optional
+import sys
+import re
 
 import torch
 from datasets import load_dataset
@@ -15,7 +17,6 @@ from transformers import (
     TrainerState,
 )
 from trl import GRPOTrainer, GRPOConfig
-from trl.rewards import reasoning_accuracy_reward
 
 from rich import box
 from rich.align import Align
@@ -40,6 +41,20 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
 model_name = "Qwen/Qwen3.5-4B"
+
+SYSTEM_PROMPT = """\
+<system>
+    <role>You are a mathematical reasoning assistant.</role>
+    <instructions>
+        <step>Think through the problem carefully inside &lt;think&gt;...&lt;/think&gt; tags.</step>
+        <step>Show your full step-by-step reasoning inside the think block.</step>
+        <step>Provide your final numeric answer inside \\boxed{{...}}.</step>
+    </instructions>
+    <format>
+        <think>step-by-step reasoning here</think>
+        \\boxed{{final answer}}
+    </format>
+</system>"""
 
 
 # ─── Sparkline ────────────────────────────────────────────────────────────────
@@ -98,7 +113,48 @@ class TrainState:
         self.elapsed: float = 0.0
         self.train_start: float = 0.0  # wall time when trainer.train() begins
         self.train_end: float = 0.0  # wall time when trainer.train() finishes
+        self.stdout_lines: deque[str] = deque(maxlen=400)
         self.lock = threading.Lock()
+
+
+class _TeeStream:
+    def __init__(self, stream, ts: TrainState) -> None:
+        self._stream = stream
+        self._state = ts
+        self._partial = ""
+
+    def write(self, data: str):
+        self._stream.write(data)
+        if not data:
+            return
+        text = self._partial + data
+        lines = text.splitlines(keepends=True)
+        complete: list[str] = []
+        partial = ""
+        for line in lines:
+            if line.endswith("\n") or line.endswith("\r"):
+                stripped = line.strip()
+                if stripped:
+                    complete.append(stripped)
+            else:
+                partial += line
+        self._partial = partial
+        if complete:
+            with self._state.lock:
+                self._state.stdout_lines.extend(complete)
+
+    def flush(self):
+        self._stream.flush()
+
+    def isatty(self):
+        return getattr(self._stream, "isatty", lambda: False)()
+
+    @property
+    def encoding(self):
+        return getattr(self._stream, "encoding", "utf-8")
+
+    def fileno(self):
+        return self._stream.fileno()
 
 
 # ─── Trainer callback ─────────────────────────────────────────────────────────
@@ -153,6 +209,8 @@ class RichGRPOCallback(TrainerCallback):
 
             # accuracy from reasoning_accuracy_reward
             for key in (
+                "rewards/accuracy_reward_func",
+                "accuracy_reward",
                 "rewards/reasoning_accuracy_reward",
                 "reasoning_accuracy_reward",
                 "reward/accuracy",
@@ -233,6 +291,17 @@ def _accuracy_table(s: TrainState) -> Table:
     return tbl
 
 
+def _stdout_text(s: TrainState) -> Text:
+    if not s.stdout_lines:
+        return Text("Awaiting printed completions…", style="dim white")
+    out = Text()
+    for idx, line in enumerate(list(s.stdout_lines)[-8:]):
+        out.append(line)
+        if idx < 7:
+            out.append("\n")
+    return out
+
+
 def _build_ui(s: TrainState, prog: Progress) -> Layout:
     with s.lock:
         step, total = s.step, s.max_steps
@@ -277,6 +346,12 @@ def _build_ui(s: TrainState, prog: Progress) -> Layout:
         accuracy_panel = Panel(
             _accuracy_table(s), title=acc_title, border_style="green", padding=(0, 1)
         )
+        print_panel = Panel(
+            _stdout_text(s),
+            title="[bold]printed samples[/bold]",
+            border_style="yellow",
+            padding=(0, 1),
+        )
         prog_panel = Panel(prog, border_style="dim", padding=(0, 1))
 
     layout = Layout()
@@ -287,7 +362,11 @@ def _build_ui(s: TrainState, prog: Progress) -> Layout:
     )
     layout["body"].split_row(
         Layout(metrics_panel, name="metrics", ratio=3),
+        Layout(name="right", ratio=3),
+    )
+    layout["right"].split_column(
         Layout(accuracy_panel, name="accuracy", ratio=2),
+        Layout(print_panel, name="prints", ratio=1),
     )
     return layout
 
@@ -375,16 +454,44 @@ ds = load_dataset("gsm8k", "main", split="train")
 
 
 def process(example):
-    solution = example["answer"].split("#### ")[-1].strip()
+    ground_truth = example["answer"].split("####")[-1].strip()
     return {
-        "prompt": f"Question: {example['question']}\n\nLet's think step by step. "
-        f"Put the final answer within \\boxed{{{solution}}}.",
-        "solution": solution,
+        "prompt": f"{SYSTEM_PROMPT}\n\nQuestion: {example['question']}",
+        "ground_truth": ground_truth,
     }
 
 
 dataset = ds.map(process)
 _t_data = time.monotonic()  # dataset ready
+
+
+def extract_boxed_answer(text: str) -> Optional[str]:
+    m = re.search(r"\\boxed\{(.*?)\}", text)
+    return m.group(1).strip() if m else None
+
+
+def accuracy_reward_func(completions, ground_truth, **kwargs):
+    return [
+        1.0 if extract_boxed_answer(c) == gt else 0.0
+        for c, gt in zip(completions, ground_truth)
+    ]
+
+
+def format_reward_func(completions, **kwargs):
+    rewards = []
+    for c in completions:
+        has_think = bool(re.search(r"<think>.*?</think>", c, re.DOTALL))
+        has_boxed = bool(re.search(r"\\\\boxed\{.*?\}", c, re.DOTALL))
+        if has_think and has_boxed:
+            rewards.append(1.0)
+        elif has_boxed:
+            rewards.append(0.5)
+        else:
+            rewards.append(0.0)
+    return rewards
+
+
+reward_funcs = [accuracy_reward_func, format_reward_func]
 
 
 # ─── vLLM + LoRA + config ─────────────────────────────────────────────────────
@@ -431,7 +538,8 @@ training_args = GRPOConfig(
     vllm_mode="colocate",
     temperature=0.7,
     max_prompt_length=256,
-    num_completions_to_print=4
+    num_completions_to_print=8,
+    top_p=0.95,
 )
 
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
@@ -482,15 +590,24 @@ _live_t = threading.Thread(
 )
 _live_t.start()
 
+_orig_stdout = sys.stdout
+_orig_stderr = sys.stderr
+sys.stdout = _TeeStream(_orig_stdout, _tui_state)
+sys.stderr = _TeeStream(_orig_stderr, _tui_state)
+
 trainer = GRPOTrainer(
     model=model,
     args=training_args,
     train_dataset=dataset,
-    reward_funcs=reasoning_accuracy_reward,
+    reward_funcs=reward_funcs,
     callbacks=[_rich_cb],
 )
 
-trainer.train()
+try:
+    trainer.train()
+finally:
+    sys.stdout = _orig_stdout
+    sys.stderr = _orig_stderr
 _t_saved = time.monotonic()  # (trl saves inside train(); capture wall time here)
 
 _live_t.join(timeout=3)
