@@ -396,36 +396,42 @@ _t_data = time.monotonic()  # dataset ready
 # )
 # _t_vllm = time.monotonic()   # vLLM engine ready
 
-peft_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM",
-)
+# peft_config = LoraConfig(
+#     r=16,
+#     lora_alpha=32,
+#     lora_dropout=0.05,
+#     bias="none",
+#     task_type="CAUSAL_LM",
+# )
 
 training_args = GRPOConfig(
     output_dir="./grpo_gsm8k",
     logging_dir="./grpo_gsm8k/tb_logs",
     num_train_epochs=1,
-    per_device_train_batch_size=4,
+    per_device_train_batch_size=8,
     gradient_accumulation_steps=4,
-    learning_rate=5e-6,
-    optim="adamw_torch",
+    learning_rate=2e-4,
+    optim="adamw_8bit",
+    weight_decay=0.01,
+    warmup_steps=100,
+    lr_scheduler_type="cosine",
     bf16=True,
     tf32=True,
-    num_generations=4,
+    num_generations=8,
     generation_kwargs={
         "max_new_tokens": 128,
         "temperature": 0.7,
         "top_p": 0.9,
         "do_sample": True,
     },
-    logging_steps=10,
-    save_steps=500,
+    logging_steps=5,
+    save_steps=200,
     report_to="tensorboard",
     use_vllm=True,
     vllm_mode="colocate",
+    temperature=0.7,
+    max_prompt_length=256,
+    num_completions_to_print=4
 )
 
 model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16)
