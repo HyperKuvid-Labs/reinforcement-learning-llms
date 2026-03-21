@@ -6,6 +6,7 @@ from typing import Optional
 import sys
 import re
 import numbers
+import os
 
 import torch
 from datasets import load_dataset
@@ -41,6 +42,7 @@ from rich.text import Text
 # enabling tf32 for faster matmul on a100
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 model_name = "Qwen/Qwen3-8B"
 
@@ -593,8 +595,8 @@ training_args = GRPOConfig(
     output_dir="./grpo_gsm8k",
     logging_dir="./grpo_gsm8k/tb_logs",
     num_train_epochs=1,
-    per_device_train_batch_size=8,
-    gradient_accumulation_steps=4,
+    per_device_train_batch_size=2,
+    gradient_accumulation_steps=16,
     learning_rate=2e-4,
     optim="adamw_8bit",
     weight_decay=0.01,
@@ -602,14 +604,21 @@ training_args = GRPOConfig(
     lr_scheduler_type="cosine",
     bf16=True,
     tf32=True,
-    num_generations=8,
+    num_generations=4,
+    generation_kwargs={
+        "max_new_tokens": 160,
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "do_sample": True,
+    },
     logging_steps=5,
     save_steps=200,
     report_to="tensorboard",
     use_vllm=True,
     vllm_mode="colocate",
     temperature=0.7,
-    # max_prompt_length=256,
+    max_prompt_length=192,
+    max_completion_length=160,
     num_completions_to_print=8,
     top_p=0.95,
 )
@@ -675,12 +684,45 @@ trainer = GRPOTrainer(
     callbacks=[_rich_cb],
 )
 
+_train_error: Optional[BaseException] = None
 try:
     trainer.train()
+except torch.OutOfMemoryError as exc:
+    _train_error = exc
+    with _tui_state.lock:
+        _tui_state.train_end = time.monotonic()
+        _tui_state.done = True
+        _tui_state.status = "oom"
+    _orig_stderr.write(
+        "\n[OOM] CUDA out of memory during training. "
+        "Applied safer defaults in this script: lower batch/generations and bounded token lengths.\n"
+    )
+    _orig_stderr.flush()
+except Exception as exc:
+    _train_error = exc
+    with _tui_state.lock:
+        _tui_state.train_end = time.monotonic()
+        _tui_state.done = True
+        _tui_state.status = "failed"
+    raise
 finally:
     sys.stdout = _orig_stdout
     sys.stderr = _orig_stderr
+    with _tui_state.lock:
+        if not _tui_state.done:
+            _tui_state.done = True
+        if _tui_state.train_end <= 0:
+            _tui_state.train_end = time.monotonic()
+
 _t_saved = time.monotonic()  # (trl saves inside train(); capture wall time here)
 
 _live_t.join(timeout=3)
-_print_summary(_tui_state, _console, _t0, _t_model, _t_data, _t_saved)
+if _train_error is None:
+    _print_summary(_tui_state, _console, _t0, _t_model, _t_data, _t_saved)
+else:
+    _orig_stderr.write(
+        f"Training aborted after {timedelta(seconds=int(_t_saved - _t0))}.\n"
+    )
+    _orig_stderr.flush()
+    if isinstance(_train_error, torch.OutOfMemoryError):
+        raise SystemExit(1)
