@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Optional
 import sys
 import re
+import numbers
 
 import torch
 from datasets import load_dataset
@@ -17,6 +18,7 @@ from transformers import (
     TrainerState,
 )
 from trl import GRPOTrainer, GRPOConfig
+from torch.utils.tensorboard import SummaryWriter
 
 from rich import box
 from rich.align import Align
@@ -163,6 +165,76 @@ class _TeeStream:
 class RichGRPOCallback(TrainerCallback):
     def __init__(self, ts: TrainState) -> None:
         self._s = ts
+        self._tb_writer: Optional[SummaryWriter] = None
+
+    @staticmethod
+    def _first_scalar(logs, keys: tuple[str, ...]) -> Optional[float]:
+        for key in keys:
+            if key in logs and isinstance(logs[key], numbers.Real):
+                return float(logs[key])
+        return None
+
+    def _write_tb_aliases(self, logs, step: int) -> None:
+        if self._tb_writer is None:
+            return
+
+        reward_keys = tuple(k for k in logs if "reward" in k.lower())
+        reward_mean = self._first_scalar(
+            logs, tuple(k for k in reward_keys if "mean" in k) or reward_keys
+        )
+        accuracy = self._first_scalar(
+            logs,
+            (
+                "rewards/accuracy_reward_func",
+                "accuracy_reward",
+                "reward/accuracy",
+                "accuracy",
+            ),
+        )
+        format_reward = self._first_scalar(
+            logs,
+            (
+                "rewards/format_reward_func",
+                "format_reward",
+                "reward/format",
+            ),
+        )
+
+        aliases: dict[str, Optional[float]] = {
+            "loss": self._first_scalar(logs, ("loss", "train_loss")),
+            "kl": self._first_scalar(logs, ("kl", "kl_loss", "actor/kl")),
+            "lr": self._first_scalar(logs, ("learning_rate", "lr")),
+            "grad_norm": self._first_scalar(logs, ("grad_norm", "gradient_norm")),
+            "clipped_ratio": self._first_scalar(
+                logs,
+                (
+                    "clip_ratio",
+                    "clipped_ratio",
+                    "policy/clipped_ratio",
+                    "actor/clipped_ratio",
+                ),
+            ),
+            "completion_length": self._first_scalar(
+                logs,
+                (
+                    "completion_length",
+                    "completions/mean_length",
+                    "mean_completion_length",
+                ),
+            ),
+            "reward": reward_mean,
+            "reward_std": self._first_scalar(
+                logs, ("reward_std", "rewards/std", "std_reward")
+            ),
+            "accuracy_r_mean": accuracy,
+            "format_r_mean": format_reward,
+            "forward_r_mean": format_reward,
+        }
+
+        for tag, value in aliases.items():
+            if value is not None:
+                self._tb_writer.add_scalar(tag, value, step)
+        self._tb_writer.flush()
 
     def on_train_begin(self, args, state: TrainerState, control: TrainerControl, **kw):
         with self._s.lock:
@@ -170,6 +242,7 @@ class RichGRPOCallback(TrainerCallback):
             self._s.total_epochs = int(args.num_train_epochs)
             self._s.status = "training"
             self._s.train_start = time.monotonic()
+        self._tb_writer = SummaryWriter(log_dir=args.logging_dir)
 
     def on_log(
         self, args, state: TrainerState, control: TrainerControl, logs=None, **kw
@@ -220,6 +293,8 @@ class RichGRPOCallback(TrainerCallback):
                     s.accuracy_history.append((state.global_step, float(logs[key])))
                     break
 
+        self._write_tb_aliases(logs, state.global_step)
+
     def on_save(self, args, state: TrainerState, control: TrainerControl, **kw):
         with self._s.lock:
             self._s.status = "saving checkpoint…"
@@ -233,6 +308,9 @@ class RichGRPOCallback(TrainerCallback):
             self._s.train_end = time.monotonic()
             self._s.done = True
             self._s.status = "done"
+        if self._tb_writer is not None:
+            self._tb_writer.close()
+            self._tb_writer = None
 
 
 # ─── TUI renderer ─────────────────────────────────────────────────────────────
