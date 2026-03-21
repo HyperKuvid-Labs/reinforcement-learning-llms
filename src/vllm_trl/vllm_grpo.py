@@ -9,7 +9,7 @@ import numbers
 
 import torch
 from datasets import load_dataset
-from peft import LoraConfig
+# from peft import LoraConfig
 from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
