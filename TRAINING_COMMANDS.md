@@ -10,6 +10,14 @@ source .venv/bin/activate
 tensorboard --logdir runs
 ```
 
+## Stable Defaults
+
+If you want stable runs with the current code:
+- HRM -> `--finetune-method lora`
+- LFM -> `--finetune-method qlora`
+
+That is the safest default split right now.
+
 ## HRM
 
 For `sapientinc/HRM-Text-1B`, use `lora` for now.
@@ -305,6 +313,104 @@ For `LiquidAI/LFM2.5-1.2B-Thinking`, start with `qlora`.
   --save-every 20 \
   --push-to-hub \
   --delete-local-checkpoints
+```
+
+## 48 GB GPU Variants
+
+If you are on a proper `48 GB` GPU machine, you can be a bit more aggressive than the laptop-safe defaults.
+
+These are the commands I would use first.
+
+### HRM DPPO top-k on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16
+```
+
+### HRM PPO on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo ppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1
+```
+
+### HRM GRPO on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo grpo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128
+```
+
+### LFM DPPO top-k on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16
+```
+
+### LFM PPO on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo ppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1
+```
+
+### LFM GRPO on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo grpo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128
 ```
 
 ## Eval / Divergence
