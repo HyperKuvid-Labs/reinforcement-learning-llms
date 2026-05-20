@@ -135,16 +135,17 @@ python train.py \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
+  --trainer-backend unsloth \
   --finetune-method qlora \
   --dppo-approx topk \
   --topk 8 \
   --save-every 20 \
   --hub-repo your-user/your-repo \
-  --delete-local-checkpoints \
-  --cpu-offload
+  --delete-local-checkpoints
 ```
 
 This is now intentionally laptop-biased by default:
+- `unsloth` is the default trainer backend
 - `qlora` is the default finetune mode
 - rollout group defaults to `2`
 - `max_new_tokens` defaults to `96`
@@ -170,10 +171,9 @@ If `--hub-repo` is omitted, the trainer falls back to:
 Examples:
 
 ```text
-yourname/aime-2025-hrm-text-1b-grpo-rk2-qlora
-yourname/aime-2025-hrm-text-1b-ppo-rk2-qlora-clip0p2
-yourname/aime-2025-hrm-text-1b-dppo-rk2-qlora-topk-topk8-delta0p03
-yourname/aime-2025-lfm2-5-1-2b-thinking-dppo-rk2-qlora-topk-topk8-delta0p03
+yourname/aime-2025-qwen3-5-4b-base-grpo-rk2-qlora
+yourname/aime-2025-qwen3-5-4b-base-ppo-rk2-qlora-clip0p2
+yourname/aime-2025-qwen3-5-4b-base-dppo-rk2-qlora-topk-topk8-delta0p03
 ```
 
 So by default the naming includes the dataset, model, algorithm, rollout-group `k`, and any algorithm-specific settings that matter for the run.

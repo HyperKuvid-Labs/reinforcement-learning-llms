@@ -63,6 +63,7 @@ class RunConfig:
     delete_local_checkpoints: bool = False
     resume: str = "off"
     cpu_offload: bool = False
+    trainer_backend: str = "unsloth"
     finetune_method: str = "qlora"
     lora_r: int = 8
     lora_alpha: int = 16

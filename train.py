@@ -38,6 +38,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete-local-checkpoints", action="store_true")
     parser.add_argument("--resume", default="off")
     parser.add_argument("--cpu-offload", action="store_true")
+    parser.add_argument("--trainer-backend", choices=("unsloth", "transformers"), default="unsloth")
     parser.add_argument("--finetune-method", choices=("full", "lora", "qlora"), default="qlora")
     parser.add_argument("--lora-r", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
@@ -77,7 +78,7 @@ def make_cli_callback():
             print("[auth] checking Hugging Face credentials", flush=True)
         elif phase == "load_start":
             print(
-                f"[load] starting | finetune={payload.get('finetune_method')} "
+                f"[load] starting | backend={payload.get('trainer_backend')} finetune={payload.get('finetune_method')} "
                 f"offload={payload.get('cpu_offload')} split={payload.get('dataset_split')}",
                 flush=True,
             )
@@ -194,6 +195,7 @@ def main() -> None:
         delete_local_checkpoints=args.delete_local_checkpoints,
         resume=args.resume,
         cpu_offload=args.cpu_offload,
+        trainer_backend=args.trainer_backend,
         finetune_method=args.finetune_method,
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,

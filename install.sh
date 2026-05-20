@@ -14,5 +14,7 @@ uv pip install \
   tensorboard \
   rich \
   plotly \
-  pandas
+  pandas \
+  trl \
+  unsloth
 uv pip install --upgrade "git+https://github.com/huggingface/transformers.git@main"

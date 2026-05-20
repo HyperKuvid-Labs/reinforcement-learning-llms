@@ -26,6 +26,8 @@ The Qwen 4B base model is the first thing I want to train now. The 7B models sta
 
 ## Stable Finetune Defaults
 
+`train.py` uses the Unsloth backend by default. Use `--trainer-backend transformers` only when you explicitly want the older fallback path.
+
 If you want the highest chance of a clean run:
 - `Qwen/Qwen3.5-4B-Base` -> `--finetune-method qlora`
 - `nvidia/AceReason-Nemotron-1.1-7B` -> `--finetune-method qlora`

@@ -57,6 +57,22 @@ def _import_stack():
     )
 
 
+def _import_unsloth_stack():
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    import torch
+    from datasets import load_dataset
+    from huggingface_hub import HfApi
+
+    try:
+        from unsloth import FastLanguageModel
+    except ImportError as exc:
+        raise RuntimeError(
+            "Unsloth backend requested but `unsloth` is not installed. Run `bash install.sh` or install `unsloth`."
+        ) from exc
+
+    return torch, load_dataset, HfApi, FastLanguageModel
+
+
 class Trainer:
     def __init__(self, config: RunConfig, callback=None) -> None:
         self.config = config
@@ -176,9 +192,90 @@ class Trainer:
             return get_peft_model(model, peft_config)
 
     def _load_components(self):
+        if self.config.trainer_backend == "unsloth":
+            return self._load_components_unsloth()
+        return self._load_components_transformers()
+
+    def _load_components_unsloth(self):
+        self._emit(
+            "load_start",
+            trainer_backend="unsloth",
+            finetune_method=self.config.finetune_method,
+            cpu_offload=self.config.cpu_offload,
+            dataset_split=self.config.dataset_split,
+        )
+        torch, load_dataset, HfApi, FastLanguageModel = _import_unsloth_stack()
+        if self.config.cpu_offload:
+            self._emit(
+                "hparam_adjustment",
+                field="cpu_offload",
+                old_value=True,
+                new_value=False,
+                reason="unsloth manages placement internally; transformers device_map offload is not used",
+            )
+            self.config.cpu_offload = False
+        dtype = torch.bfloat16 if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else None
+        load_in_4bit = self.config.finetune_method == "qlora"
+        load_kwargs = {
+            "model_name": self.config.model_id,
+            "max_seq_length": self.config.max_prompt_tokens + self.config.max_new_tokens,
+            "dtype": dtype,
+            "load_in_4bit": load_in_4bit,
+            "fast_inference": False,
+            "token": getattr(self, "hf_token", None),
+        }
+        try:
+            model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
+        except TypeError:
+            load_kwargs.pop("token", None)
+            try:
+                model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
+            except TypeError:
+                load_kwargs.pop("fast_inference", None)
+                model, tokenizer = FastLanguageModel.from_pretrained(**load_kwargs)
+        self._emit("tokenizer_loaded")
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+        if hasattr(model, "config"):
+            model.config.use_cache = False
+        self._emit(
+            "model_loaded",
+            cuda_available=bool(torch.cuda.is_available()),
+            model_device=str(self._device_of(model)),
+            bf16=bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported()),
+        )
+        if self.config.finetune_method in {"lora", "qlora"}:
+            model = FastLanguageModel.get_peft_model(
+                model,
+                r=self.config.lora_r,
+                target_modules=self._lora_target_modules(),
+                lora_alpha=self.config.lora_alpha,
+                lora_dropout=self.config.lora_dropout,
+                bias="none",
+                use_gradient_checkpointing="unsloth",
+                random_state=self.config.seed,
+            )
+        elif hasattr(model, "gradient_checkpointing_enable"):
+            model.gradient_checkpointing_enable()
+        if hasattr(FastLanguageModel, "for_training"):
+            model = FastLanguageModel.for_training(model)
+        self._emit(
+            "adapter_ready",
+            finetune_method=self.config.finetune_method,
+            trainable_params=sum(p.numel() for p in model.parameters() if p.requires_grad),
+        )
+        self._emit("dataset_loading", dataset=self.config.dataset_id, split=self.config.dataset_split)
+        dataset = load_dataset(self.config.dataset_id, split=self.config.dataset_split)
+        if self.config.train_examples_limit:
+            dataset = dataset.select(range(min(len(dataset), self.config.train_examples_limit)))
+        self._emit("dataset_loaded", examples=len(dataset))
+        return torch, tokenizer, model, dataset, HfApi
+
+    def _load_components_transformers(self):
         self._normalize_finetune_method()
         self._emit(
             "load_start",
+            trainer_backend="transformers",
             finetune_method=self.config.finetune_method,
             cpu_offload=self.config.cpu_offload,
             dataset_split=self.config.dataset_split,
@@ -494,7 +591,8 @@ class Trainer:
         prune_status = 0.0
         if self.config.push_to_hub and self.config.hub_repo:
             self._emit("uploading", checkpoint_dir=str(self.config.checkpoint_dir))
-            _, _, _, _, _, HfApi = _import_stack()
+            from huggingface_hub import HfApi
+
             api = HfApi()
             api.upload_folder(
                 repo_id=self.config.hub_repo,
