@@ -13,8 +13,9 @@ The setup is simple from first principles:
 So the point here is not “best possible full RLHF stack”. The point is to hold the reward side fixed and compare the optimization behavior cleanly.
 
 This repo uses:
-- `sapientinc/HRM-Text-1B`
-- `LiquidAI/LFM2.5-1.2B-Thinking`
+- `nvidia/AceReason-Nemotron-1.1-7B`
+- `Skywork/Skywork-OR1-Math-7B`
+- `nvidia/AceMath-RL-Nemotron-7B`
 
 The dataset is:
 - `test-time-compute/aime_2025`
@@ -43,22 +44,25 @@ So all three methods are seeing the same reward function. That is the whole poin
 
 ## Why These Two Models
 
-- `sapientinc/HRM-Text-1B`
-- `LiquidAI/LFM2.5-1.2B-Thinking`
+- `nvidia/AceReason-Nemotron-1.1-7B`
+- `Skywork/Skywork-OR1-Math-7B`
+- `nvidia/AceMath-RL-Nemotron-7B`
 
 This pair is intentional.
 
-`HRM-Text-1B` is interesting because it is a newer **hierarchical reasoning model** style architecture. `LFM2.5-1.2B-Thinking` gives a very different reasoning-model family to contrast against it. So I’m not just comparing algorithms here, I also want to see how the same RL-style update rules behave across two different reasoning architectures on the same AIME setup.
+`AceReason-Nemotron-1.1-7B` is the primary model here because it is a strong 7B reasoning model. `Skywork-OR1-Math-7B` is the second comparison point, and `AceMath-RL-Nemotron-7B` is the optional third check. So I’m comparing algorithms, but I’m also comparing how the same RL-style update rules behave across different reasoning-model families on the same AIME setup.
 
-> The model pair is intentional: HRM-Text-1B represents a newer hierarchical reasoning architecture, while LFM2.5-1.2B-Thinking provides a contrasting reasoning model family, so the repo compares both algorithm behavior and cross-architecture training behavior on the same AIME setup.
+> The model set is intentional: AceReason-Nemotron-1.1-7B is the primary reasoning model, Skywork-OR1-Math-7B is the second comparison point, and AceMath-RL-Nemotron-7B is the optional third check, so the repo compares both algorithm behavior and cross-model training behavior on the same AIME setup.
 
 Notes from upstream model cards:
-- `sapientinc/HRM-Text-1B` needs `trust_remote_code=True`, and may need a recent `transformers` build with `hrm_text` support.
-- `LiquidAI/LFM2.5-1.2B-Thinking` is a reasoning model meant to work with normal Transformers-style text generation flows.
+- `nvidia/AceReason-Nemotron-1.1-7B` is a 7B reasoning model that should work with the normal Transformers-style text generation flow.
+- `Skywork/Skywork-OR1-Math-7B` is another math reasoning model in the same size band.
+- `nvidia/AceMath-RL-Nemotron-7B` is the optional third comparison model.
 
 Sources:
-- https://huggingface.co/sapientinc/HRM-Text-1B
-- https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking
+- https://huggingface.co/nvidia/AceReason-Nemotron-1.1-7B
+- https://huggingface.co/Skywork/Skywork-OR1-Math-7B
+- https://huggingface.co/nvidia/AceMath-RL-Nemotron-7B
 - https://huggingface.co/datasets/test-time-compute/aime_2025
 
 ## Logging
@@ -124,7 +128,7 @@ Single run example:
 
 ```bash
 python train.py \
-  --model sapientinc/HRM-Text-1B \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
@@ -149,7 +153,7 @@ If you just want to see whether the pipeline survives end to end, use the smoke 
 
 ```bash
 python train.py \
-  --model sapientinc/HRM-Text-1B \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
   --smoke-test
 ```
@@ -174,9 +178,9 @@ So by default the naming includes the dataset, model, algorithm, rollout-group `
 Other examples:
 
 ```bash
-python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo grpo
-python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo ppo
-python compare_divergence.py --model sapientinc/HRM-Text-1B --approx all
+python train.py --model Skywork/Skywork-OR1-Math-7B --algo grpo
+python train.py --model Skywork/Skywork-OR1-Math-7B --algo ppo
+python compare_divergence.py --model nvidia/AceReason-Nemotron-1.1-7B --approx all
 python tui.py
 ```
 

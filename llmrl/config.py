@@ -8,8 +8,9 @@ import re
 
 DEFAULT_DATASET = "test-time-compute/aime_2025"
 DEFAULT_MODELS = (
-    "sapientinc/HRM-Text-1B",
-    "LiquidAI/LFM2.5-1.2B-Thinking",
+    "nvidia/AceReason-Nemotron-1.1-7B",
+    "Skywork/Skywork-OR1-Math-7B",
+    "nvidia/AceMath-RL-Nemotron-7B",
 )
 DEFAULT_ALGOS = ("grpo", "ppo", "dppo")
 
