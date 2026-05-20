@@ -77,7 +77,7 @@ class DashboardState:
 
 
 def make_header(current: dict[str, object]) -> Panel:
-    title = Text("AIME 2025 RL Training Console", style="bold white", justify="center")
+    title = Text("Math RL Training Console", style="bold white", justify="center")
     subtitle = Text(
         f"{current.get('model_id', 'idle')}  |  {current.get('algo', 'queue')}  |  TensorBoard-first",
         style="grey70",

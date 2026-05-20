@@ -5,6 +5,7 @@ from decimal import Decimal, InvalidOperation
 
 
 BOXED_START_RE = re.compile(r"\\boxed\{")
+GSM8K_FINAL_RE = re.compile(r"####\s*([^\n]+)")
 FINAL_ANSWER_RE = re.compile(
     r"(?:final\s+answer|answer)\s*(?:is|=|:)\s*(.+)$",
     flags=re.IGNORECASE | re.MULTILINE,
@@ -18,7 +19,7 @@ TRAILING_PUNCT_RE = re.compile(r"[\s\.\,\:\;\!\?]+$")
 
 def build_prompt(question: str) -> str:
     return (
-        "Solve the following AIME 2025 mathematics problem.\n"
+        "Solve the following grade-school mathematics problem.\n"
         "Work through the math, then give exactly one final boxed result.\n"
         "The final line must be in this format, replacing 123 with the actual answer:\n"
         "Final Answer: \\boxed{123}\n"
@@ -46,6 +47,10 @@ def _extract_last_boxed(text: str) -> str:
 
 
 def extract_final_answer(text: str) -> str:
+    gsm8k_matches = GSM8K_FINAL_RE.findall(text)
+    if gsm8k_matches:
+        return TRAILING_PUNCT_RE.sub("", gsm8k_matches[-1].strip())
+
     boxed = _extract_last_boxed(text)
     if boxed:
         return boxed
@@ -97,5 +102,5 @@ def normalize_answer(value: str) -> str:
 
 def compute_binary_reward(prediction: str, answer: str) -> int:
     pred_final = normalize_answer(extract_final_answer(prediction))
-    gold_final = normalize_answer(answer)
+    gold_final = normalize_answer(extract_final_answer(answer))
     return int(pred_final == gold_final)

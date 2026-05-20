@@ -6,12 +6,12 @@ from pathlib import Path
 import re
 
 
-DEFAULT_DATASET = "test-time-compute/aime_2025"
+DEFAULT_DATASET = "openai/gsm8k"
+DEFAULT_DATASET_CONFIG = "main"
 DEFAULT_MODELS = (
+    "LiquidAI/LFM2.5-1.2B-Thinking",
+    "sapientinc/HRM-Text-1B",
     "Qwen/Qwen3.5-4B-Base",
-    "nvidia/AceReason-Nemotron-1.1-7B",
-    "Skywork/Skywork-OR1-Math-7B",
-    "nvidia/AceMath-RL-Nemotron-7B",
 )
 DEFAULT_ALGOS = ("grpo", "ppo", "dppo")
 
@@ -36,14 +36,15 @@ class RunConfig:
     model_id: str
     algo: str
     dataset_id: str = DEFAULT_DATASET
+    dataset_config: str | None = DEFAULT_DATASET_CONFIG
     dataset_split: str = "train"
     output_root: Path = Path("runs")
     checkpoints_root: Path = Path("checkpoints")
     offload_root: Path = Path(".offload")
     seed: int = 7
     rollout_group_size: int = 2
-    max_prompt_tokens: int = 768
-    max_new_tokens: int = 96
+    max_prompt_tokens: int = 512
+    max_new_tokens: int = 64
     temperature: float = 0.7
     top_p: float = 0.95
     learning_rate: float = 5e-6
@@ -63,7 +64,7 @@ class RunConfig:
     delete_local_checkpoints: bool = False
     resume: str = "off"
     cpu_offload: bool = False
-    trainer_backend: str = "unsloth"
+    trainer_backend: str = "auto"
     finetune_method: str = "qlora"
     lora_r: int = 8
     lora_alpha: int = 16
@@ -78,7 +79,8 @@ class RunConfig:
 
     @property
     def dataset_slug(self) -> str:
-        return _slugify(self.dataset_id.split("/")[-1])
+        parts = [self.dataset_id.split("/")[-1], self.dataset_config]
+        return _slugify("-".join(part for part in parts if part))
 
     @property
     def model_slug(self) -> str:

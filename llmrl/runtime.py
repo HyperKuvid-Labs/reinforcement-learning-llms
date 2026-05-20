@@ -116,6 +116,11 @@ class Trainer:
             )
             self.config.finetune_method = "lora"
 
+    def _resolved_backend(self) -> str:
+        if self.config.trainer_backend != "auto":
+            return self.config.trainer_backend
+        return "unsloth" if self.config.model_id.startswith("Qwen/") else "transformers"
+
     def _build_model_load_kwargs(self, torch, BitsAndBytesConfig):
         use_bf16 = bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
         kwargs = {
@@ -146,6 +151,8 @@ class Trainer:
             "v_proj",
             "o_proj",
             "gate_proj",
+            "gqkv_proj",
+            "gate_up_proj",
             "up_proj",
             "down_proj",
         ]
@@ -192,14 +199,14 @@ class Trainer:
             return get_peft_model(model, peft_config)
 
     def _load_components(self):
-        if self.config.trainer_backend == "unsloth":
+        if self._resolved_backend() == "unsloth":
             return self._load_components_unsloth()
         return self._load_components_transformers()
 
     def _load_components_unsloth(self):
         self._emit(
             "load_start",
-            trainer_backend="unsloth",
+            trainer_backend=self._resolved_backend(),
             finetune_method=self.config.finetune_method,
             cpu_offload=self.config.cpu_offload,
             dataset_split=self.config.dataset_split,
@@ -264,10 +271,13 @@ class Trainer:
             finetune_method=self.config.finetune_method,
             trainable_params=sum(p.numel() for p in model.parameters() if p.requires_grad),
         )
-        self._emit("dataset_loading", dataset=self.config.dataset_id, split=self.config.dataset_split)
-        dataset = load_dataset(self.config.dataset_id, split=self.config.dataset_split)
-        if self.config.train_examples_limit:
-            dataset = dataset.select(range(min(len(dataset), self.config.train_examples_limit)))
+        self._emit(
+            "dataset_loading",
+            dataset=self.config.dataset_id,
+            dataset_config=self.config.dataset_config,
+            split=self.config.dataset_split,
+        )
+        dataset = self._load_dataset(load_dataset)
         self._emit("dataset_loaded", examples=len(dataset))
         return torch, tokenizer, model, dataset, HfApi
 
@@ -275,7 +285,7 @@ class Trainer:
         self._normalize_finetune_method()
         self._emit(
             "load_start",
-            trainer_backend="transformers",
+            trainer_backend=self._resolved_backend(),
             finetune_method=self.config.finetune_method,
             cpu_offload=self.config.cpu_offload,
             dataset_split=self.config.dataset_split,
@@ -325,12 +335,28 @@ class Trainer:
             finetune_method=self.config.finetune_method,
             trainable_params=sum(p.numel() for p in model.parameters() if p.requires_grad),
         )
-        self._emit("dataset_loading", dataset=self.config.dataset_id, split=self.config.dataset_split)
-        dataset = load_dataset(self.config.dataset_id, split=self.config.dataset_split)
-        if self.config.train_examples_limit:
-            dataset = dataset.select(range(min(len(dataset), self.config.train_examples_limit)))
+        self._emit(
+            "dataset_loading",
+            dataset=self.config.dataset_id,
+            dataset_config=self.config.dataset_config,
+            split=self.config.dataset_split,
+        )
+        dataset = self._load_dataset(load_dataset)
         self._emit("dataset_loaded", examples=len(dataset))
         return torch, tokenizer, model, dataset, HfApi
+
+    def _load_dataset(self, load_dataset):
+        if self.config.dataset_config:
+            dataset = load_dataset(
+                self.config.dataset_id,
+                self.config.dataset_config,
+                split=self.config.dataset_split,
+            )
+        else:
+            dataset = load_dataset(self.config.dataset_id, split=self.config.dataset_split)
+        if self.config.train_examples_limit:
+            dataset = dataset.select(range(min(len(dataset), self.config.train_examples_limit)))
+        return dataset
 
     def _prepare_hf_auth(self) -> tuple[str, str]:
         self._emit("auth")
@@ -421,7 +447,7 @@ class Trainer:
             expanded_answers.extend([answer] * self.config.rollout_group_size)
         extracted_answers = [extract_final_answer(text) for text in decoded]
         normalized_predictions = [normalize_answer(answer) for answer in extracted_answers]
-        normalized_answers = [normalize_answer(answer) for answer in expanded_answers]
+        normalized_answers = [normalize_answer(extract_final_answer(answer)) for answer in expanded_answers]
         rewards = torch.tensor(
             [compute_binary_reward(text, answer) for text, answer in zip(decoded, expanded_answers)],
             device=device,

@@ -815,7 +815,7 @@ wheels = [
 ]
 
 [[package]]
-name = "llmrl-aime25"
+name = "llmrl-math"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

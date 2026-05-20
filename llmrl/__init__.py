@@ -1,4 +1,4 @@
-"""LLM RL comparison package for AIME 2025 experiments."""
+"""LLM RL comparison package for verifier-graded math experiments."""
 
 from .config import ModelConfig, RunConfig
 

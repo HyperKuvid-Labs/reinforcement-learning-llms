@@ -1,29 +1,32 @@
-# AIME 2025 RL Comparison for 1B LLMs
+# Laptop RL Comparison on Easier Math
 
-This repo is basically me trying to compare **GRPO**, **PPO**, and **DPPO** on the same math setup, without hiding the core assumption.
+This repo is me trying to compare **GRPO**, **PPO**, and **DPPO** without making the setup heavier than the laptop can handle.
 
-The setup is simple from first principles:
-- take a reasoning model
-- ask it an AIME 2025 question
-- sample rollouts
-- check whether the final answer is actually correct
-- give reward `1` if correct, else `0`
-- then compare how different policy update rules behave under that same signal
+The first-principles setup is simple:
+- take a small reasoning model
+- ask it an easier math question
+- sample a small group of rollouts
+- parse the final answer
+- give reward `1` if the answer matches, else `0`
+- compare how the policy update rule behaves under that same verifier signal
 
-So the point here is not “best possible full RLHF stack”. The point is to hold the reward side fixed and compare the optimization behavior cleanly.
+So this is not a full RLHF stack. There is no learned reward model and no value critic here. The point is to keep the reward side fixed and compare the update behavior cleanly.
 
-This repo uses:
+Default dataset:
+- `openai/gsm8k`
+- config: `main`
+- split: `train`
+
+Default models:
+- `LiquidAI/LFM2.5-1.2B-Thinking`
+- `sapientinc/HRM-Text-1B`
 - `Qwen/Qwen3.5-4B-Base`
-- `nvidia/AceReason-Nemotron-1.1-7B`
-- `Skywork/Skywork-OR1-Math-7B`
-- `nvidia/AceMath-RL-Nemotron-7B`
-
-The dataset is:
-- `test-time-compute/aime_2025`
 
 > This repo compares GRPO, PPO-style clipping, and DPPO-style divergence gating under the same deterministic verifier reward, without a learned reward model or value critic, so the comparison is intentionally about policy update behavior rather than full actor-critic RLHF PPO.
 
-## What Is Actually Being Compared
+> The current laptop-first setup uses GSM8K instead of AIME because the 1B-class models need an easier reward surface before the RL loop gives useful signal.
+
+## What Is Compared
 
 Main comparison:
 - `GRPO`
@@ -31,48 +34,44 @@ Main comparison:
 - `DPPO` with `top-k` divergence approximation by default
 
 Extra divergence study:
-- `naive` exact divergence, eval-only
+- `naive` full-vocab divergence, eval-only
 - `binary` approximation
 - `top-k` approximation
 
-Reward is binary-answer reward on completions:
-- extract the final answer
-- normalize it
-- compare against the gold AIME answer
-- reward = `1` if it matches, else `0`
+Reward is binary final-answer reward:
+- extract the model final answer
+- extract the gold answer, including GSM8K `####` answers
+- normalize both
+- reward = `1` if they match, else `0`
 
-So all three methods are seeing the same reward function. That is the whole point of this repo.
+## Why These Models
 
-## Why These Two Models
+The small-model comparison is intentional.
 
-- `nvidia/AceReason-Nemotron-1.1-7B`
-- `Skywork/Skywork-OR1-Math-7B`
-- `nvidia/AceMath-RL-Nemotron-7B`
+`LiquidAI/LFM2.5-1.2B-Thinking` is the diffusion-style small reasoning model. `sapientinc/HRM-Text-1B` is the hierarchical reasoning model. I want to see whether the same RL update behaves differently across these two model families before scaling the experiment back up.
 
-This pair is intentional.
+`Qwen/Qwen3.5-4B-Base` stays as the optional stronger baseline, but it is no longer the laptop-first default path.
 
-`Qwen/Qwen3.5-4B-Base` is the primary baseline here because it is the 4B model I want to train first. `AceReason-Nemotron-1.1-7B` is the stronger 7B comparison point, `Skywork-OR1-Math-7B` is the second 7B comparison point, and `AceMath-RL-Nemotron-7B` is the optional third check. So I’m comparing algorithms, but I’m also comparing how the same RL-style update rules behave across different reasoning-model families on the same AIME setup.
+> HRM and LFM are not just two random 1B models here: HRM is a hierarchical reasoning model and LFM is a diffusion-based model, so the comparison is also about how different model families respond to the same verifier RL loop.
 
-> The model set is intentional: Qwen/Qwen3.5-4B-Base is the primary baseline, AceReason-Nemotron-1.1-7B is the stronger 7B comparison point, Skywork-OR1-Math-7B is the second 7B comparison point, and AceMath-RL-Nemotron-7B is the optional third check, so the repo compares both algorithm behavior and cross-model training behavior on the same AIME setup.
+## Backends
 
-Notes from upstream model cards:
-- `Qwen/Qwen3.5-4B-Base` is the main 4B baseline and should work with the normal Transformers-style text generation flow.
-- `nvidia/AceReason-Nemotron-1.1-7B` is a 7B reasoning model that should work with the normal Transformers-style text generation flow.
-- `Skywork/Skywork-OR1-Math-7B` is another math reasoning model in the same size band.
-- `nvidia/AceMath-RL-Nemotron-7B` is the optional third comparison model.
+`--trainer-backend auto` is the default.
 
-Sources:
-- https://huggingface.co/Qwen/Qwen3.5-4B-Base
-- https://huggingface.co/nvidia/AceReason-Nemotron-1.1-7B
-- https://huggingface.co/Skywork/Skywork-OR1-Math-7B
-- https://huggingface.co/nvidia/AceMath-RL-Nemotron-7B
-- https://huggingface.co/datasets/test-time-compute/aime_2025
+In auto mode:
+- HRM and LFM use the regular Transformers/PEFT path
+- Qwen uses Unsloth, because that is the path that makes more sense for the optional 4B run
+
+Stable finetune choices:
+- LFM: `--finetune-method qlora`
+- HRM: `--finetune-method lora`
+- Qwen 4B: `--finetune-method qlora`
 
 ## Logging
 
 Everything that matters should go to **TensorBoard**.
 
-The TUI is just the live operator surface. TensorBoard is the actual source of truth for:
+The TUI is only the live operator surface. TensorBoard is the actual source of truth for:
 - training metrics
 - eval metrics
 - divergence stats
@@ -91,6 +90,7 @@ Representative tags:
 - `train/loss`
 - `train/reward_mean`
 - `train/reward_std`
+- `train/reward_nonzero_fraction`
 - `train/advantage_mean`
 - `train/advantage_std`
 - `train/clip_fraction`
@@ -117,8 +117,6 @@ Bootstrap from scratch:
 bash install.sh
 ```
 
-The local environment here previously had a broken CUDA-linked PyTorch install, so if `torch` still fails to import because of missing CUDA shared libraries, reinstall PyTorch for your exact CUDA version.
-
 Before training or divergence eval starts, the CLI asks for:
 - `HF_USERNAME`
 - `HF_TOKEN`
@@ -127,39 +125,59 @@ These get saved into a repo-local `.env` and reused later.
 
 ## Training
 
-Single run example:
+Laptop-first DPPO run:
 
 ```bash
-python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
   --algo dppo \
-  --dataset test-time-compute/aime_2025 \
+  --dataset openai/gsm8k \
+  --dataset-config main \
   --dataset-split train \
-  --trainer-backend unsloth \
   --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
   --dppo-approx topk \
   --topk 8 \
-  --save-every 20 \
-  --hub-repo your-user/your-repo \
-  --delete-local-checkpoints
+  --micro-batch-size 1 \
+  --train-examples-limit 200
 ```
 
-This is now intentionally laptop-biased by default:
-- `unsloth` is the default trainer backend
-- `qlora` is the default finetune mode
-- rollout group defaults to `2`
-- `max_new_tokens` defaults to `96`
-- PPO inner epochs default to `1`
-- `top-k` default is `8`
-- checkpoints are pushed by default unless you pass `--no-push-to-hub`
-
-If you just want to see whether the pipeline survives end to end, use the smoke preset first:
+HRM version:
 
 ```bash
-python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
   --algo dppo \
-  --smoke-test
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 8 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+`train.py --tui` launches the TUI for that exact run:
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo grpo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-new-tokens 64 \
+  --train-examples-limit 200 \
+  --tui
 ```
 
 If `--hub-repo` is omitted, the trainer falls back to:
@@ -171,38 +189,24 @@ If `--hub-repo` is omitted, the trainer falls back to:
 Examples:
 
 ```text
-yourname/aime-2025-qwen3-5-4b-base-grpo-rk2-qlora
-yourname/aime-2025-qwen3-5-4b-base-ppo-rk2-qlora-clip0p2
-yourname/aime-2025-qwen3-5-4b-base-dppo-rk2-qlora-topk-topk8-delta0p03
+yourname/gsm8k-main-lfm2-5-1-2b-thinking-grpo-rk2-qlora
+yourname/gsm8k-main-hrm-text-1b-ppo-rk2-lora-clip0p2
+yourname/gsm8k-main-lfm2-5-1-2b-thinking-dppo-rk2-qlora-topk-topk8-delta0p03
 ```
 
-So by default the naming includes the dataset, model, algorithm, rollout-group `k`, and any algorithm-specific settings that matter for the run.
+Checkpoints are pushed by default. Pass `--no-push-to-hub` only for local smoke/debug runs.
 
-Other examples:
+Copy-paste commands live in [TRAINING_COMMANDS.md](/home/pradheep/reinforcement-learning-llms/TRAINING_COMMANDS.md).
+
+## AIME Later
+
+AIME is still supported, but it is no longer the default because it was too sparse for the small-model laptop loop.
+
+For AIME, pass:
 
 ```bash
-python train.py --model Qwen/Qwen3.5-4B-Base --algo grpo
-python train.py --model Qwen/Qwen3.5-4B-Base --algo ppo
-python compare_divergence.py --model Qwen/Qwen3.5-4B-Base --approx all
-python tui.py
+--dataset test-time-compute/aime_2025 --dataset-config none
 ```
-
-## Divergence Approximation
-
-Why the approximation story exists at all:
-
-For DPPO, checking full distribution shift directly is expensive for LLMs, so this repo keeps three views of it:
-
-- `binary`
-  sampled-token probability vs everything else
-
-- `top-k`
-  keep `TopK(mu)` plus the sampled token, and collapse the rest into `other`
-
-- `naive`
-  full-vocab divergence
-
-`naive` is eval-only here because that is the expensive reference version.
 
 ## Repo Layout
 

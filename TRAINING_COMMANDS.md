@@ -1,6 +1,8 @@
 # Training Commands
 
-This is the copy-paste sheet for the runs that actually make sense here.
+This is the copy-paste sheet for the laptop-first runs.
+
+The current default dataset is `openai/gsm8k` with config `main`. That is intentional: AIME was too sparse for 1B-class models, so GSM8K is the easier reward surface for debugging the RL loop.
 
 ## Setup
 
@@ -10,136 +12,102 @@ source .venv/bin/activate
 tensorboard --logdir runs
 ```
 
-## Recommended Models
+## Model Choices
 
-Primary model:
+Primary laptop models:
+- `LiquidAI/LFM2.5-1.2B-Thinking`
+- `sapientinc/HRM-Text-1B`
+
+Optional stronger baseline:
 - `Qwen/Qwen3.5-4B-Base`
 
-Secondary models:
-- `nvidia/AceReason-Nemotron-1.1-7B`
-- `Skywork/Skywork-OR1-Math-7B`
+Stable finetune choices:
+- LFM -> `--finetune-method qlora`
+- HRM -> `--finetune-method lora`
+- Qwen 4B -> `--finetune-method qlora`
 
-Optional third model:
-- `nvidia/AceMath-RL-Nemotron-7B`
+Backend default:
+- `--trainer-backend auto`
+- auto uses Transformers for HRM/LFM
+- auto uses Unsloth for Qwen
 
-The Qwen 4B base model is the first thing I want to train now. The 7B models stay here as comparison points.
+Important: do not use `--rollout-group-size 1` for real training. The group advantage becomes zero. Use `1` only for smoke tests.
 
-## Stable Finetune Defaults
+## Smoke Tests
 
-`train.py` uses the Unsloth backend by default. Use `--trainer-backend transformers` only when you explicitly want the older fallback path.
-
-If you want the highest chance of a clean run:
-- `Qwen/Qwen3.5-4B-Base` -> `--finetune-method qlora`
-- `nvidia/AceReason-Nemotron-1.1-7B` -> `--finetune-method qlora`
-- `Skywork/Skywork-OR1-Math-7B` -> `--finetune-method qlora`
-- `nvidia/AceMath-RL-Nemotron-7B` -> `--finetune-method qlora`
-
-If you are on a strong `48 GB` GPU and want to push harder, you can try `--finetune-method full`, but `qlora` is still the safer baseline.
-
-## Smoke Test
-
-Use this first before any real run:
+LFM smoke test:
 
 ```bash
 .venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
   --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --smoke-test
-```
-
-TUI version:
-
-```bash
-.venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
+  --dataset openai/gsm8k \
+  --dataset-config main \
   --dataset-split train \
   --finetune-method qlora \
   --smoke-test \
-  --tui
+  --no-push-to-hub
 ```
 
-## Main Runs: Qwen3.5-4B-Base
+HRM smoke test:
 
-These are the `24 GB`-oriented commands. The trainer now microbatches the update pass, but the rollout shape still matters, so keep the default Qwen run at `rk2/512/64` unless you are on a larger GPU.
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method lora \
+  --smoke-test \
+  --no-push-to-hub
+```
+
+## LFM2.5-1.2B-Thinking
 
 ### GRPO
 
 ```bash
 .venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
   --algo grpo \
-  --dataset test-time-compute/aime_2025 \
+  --dataset openai/gsm8k \
+  --dataset-config main \
   --dataset-split train \
   --finetune-method qlora \
   --rollout-group-size 2 \
   --max-prompt-tokens 512 \
   --max-new-tokens 64 \
-  --micro-batch-size 1
+  --micro-batch-size 1 \
+  --train-examples-limit 200
 ```
 
 ### PPO
 
 ```bash
 .venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
   --algo ppo \
-  --dataset test-time-compute/aime_2025 \
+  --dataset openai/gsm8k \
+  --dataset-config main \
   --dataset-split train \
   --finetune-method qlora \
   --rollout-group-size 2 \
   --max-prompt-tokens 512 \
   --max-new-tokens 64 \
   --ppo-epochs 1 \
-  --micro-batch-size 1
+  --micro-batch-size 1 \
+  --train-examples-limit 200
 ```
 
 ### DPPO top-k
 
 ```bash
 .venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
   --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 2 \
-  --max-prompt-tokens 512 \
-  --max-new-tokens 64 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 8 \
-  --micro-batch-size 1
-```
-
-### DPPO binary
-
-```bash
-.venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 2 \
-  --max-prompt-tokens 512 \
-  --max-new-tokens 64 \
-  --ppo-epochs 1 \
-  --dppo-approx binary \
-  --micro-batch-size 1
-```
-
-### DPPO top-k with TUI
-
-```bash
-.venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
+  --dataset openai/gsm8k \
+  --dataset-config main \
   --dataset-split train \
   --finetune-method qlora \
   --rollout-group-size 2 \
@@ -149,301 +117,229 @@ These are the `24 GB`-oriented commands. The trainer now microbatches the update
   --dppo-approx topk \
   --topk 8 \
   --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+### DPPO binary
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx binary \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+## HRM-Text-1B
+
+### GRPO
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo grpo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+### PPO
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo ppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+### DPPO top-k
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 8 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+### DPPO binary
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method lora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx binary \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+## TUI For Exact Run
+
+Add `--tui` to any exact training command.
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 8 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200 \
   --tui
 ```
 
-## Main Runs: AceReason-Nemotron-1.1-7B
+## Optional Qwen 4B Baseline
 
-### GRPO
-
-```bash
-.venv/bin/python train.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
-  --algo grpo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128
-```
-
-### PPO
-
-```bash
-.venv/bin/python train.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
-  --algo ppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1
-```
-
-### DPPO top-k
-
-```bash
-.venv/bin/python train.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-### DPPO binary
-
-```bash
-.venv/bin/python train.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx binary
-```
-
-## Main Runs: Skywork-OR1-Math-7B
-
-### GRPO
-
-```bash
-.venv/bin/python train.py \
-  --model Skywork/Skywork-OR1-Math-7B \
-  --algo grpo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128
-```
-
-### PPO
-
-```bash
-.venv/bin/python train.py \
-  --model Skywork/Skywork-OR1-Math-7B \
-  --algo ppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1
-```
-
-### DPPO top-k
-
-```bash
-.venv/bin/python train.py \
-  --model Skywork/Skywork-OR1-Math-7B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-### DPPO binary
-
-```bash
-.venv/bin/python train.py \
-  --model Skywork/Skywork-OR1-Math-7B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx binary
-```
-
-## Optional Third Model: AceMath-RL-Nemotron-7B
-
-### DPPO top-k
-
-```bash
-.venv/bin/python train.py \
-  --model nvidia/AceMath-RL-Nemotron-7B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-## 48 GB GPU Variants
-
-These are the commands I would use on an `L40S`-class `48 GB` GPU if I want a stronger run than the laptop-safe defaults.
-
-### Qwen DPPO top-k, QLoRA
+Use this only if the laptop has enough headroom, or move it to a 24 GB+ GPU.
 
 ```bash
 .venv/bin/python train.py \
   --model Qwen/Qwen3.5-4B-Base \
   --algo dppo \
-  --dataset test-time-compute/aime_2025 \
+  --dataset openai/gsm8k \
+  --dataset-config main \
   --dataset-split train \
   --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 384 \
+  --max-new-tokens 64 \
   --ppo-epochs 1 \
   --dppo-approx topk \
-  --topk 16
-```
-
-### Qwen DPPO top-k, full finetune
-
-```bash
-.venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method full \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-### AceReason DPPO top-k, full finetune
-
-```bash
-.venv/bin/python train.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method full \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-### Skywork DPPO top-k, full finetune
-
-```bash
-.venv/bin/python train.py \
-  --model Skywork/Skywork-OR1-Math-7B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method full \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-If full finetune starts getting unstable, go straight back to `qlora`.
-
-## Hugging Face Push
-
-### Qwen DPPO top-k with push
-
-```bash
-.venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16 \
-  --save-every 20 \
-  --delete-local-checkpoints
-```
-
-### Explicit repo name
-
-```bash
-.venv/bin/python train.py \
-  --model Qwen/Qwen3.5-4B-Base \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16 \
-  --hub-repo yourname/aime-2025-qwen-qwen3-5-4b-base-dppo-rk4-qlora-topk16
+  --topk 8 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
 ```
 
 ## Divergence Eval
 
-### Qwen
+LFM:
 
 ```bash
 .venv/bin/python compare_divergence.py \
-  --model Qwen/Qwen3.5-4B-Base \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split test \
   --approx all \
-  --topk 16
+  --topk 8
 ```
 
-### AceReason
+HRM:
 
 ```bash
 .venv/bin/python compare_divergence.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
+  --model sapientinc/HRM-Text-1B \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split test \
   --approx all \
-  --topk 16
+  --topk 8
 ```
 
-### Skywork
+## Hugging Face Push
+
+Training pushes checkpoints by default.
+
+Default repo naming:
+
+```text
+<HF_USERNAME>/<dataset-slug>-<model-slug>-<algo-suffix>
+```
+
+Examples:
+
+```text
+yourname/gsm8k-main-lfm2-5-1-2b-thinking-grpo-rk2-qlora
+yourname/gsm8k-main-hrm-text-1b-ppo-rk2-lora-clip0p2
+yourname/gsm8k-main-lfm2-5-1-2b-thinking-dppo-rk2-qlora-topk-topk8-delta0p03
+```
+
+Use an explicit repo if needed:
 
 ```bash
-.venv/bin/python compare_divergence.py \
-  --model Skywork/Skywork-OR1-Math-7B \
-  --approx all \
-  --topk 16
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --finetune-method qlora \
+  --hub-repo yourname/gsm8k-lfm-dppo-topk8
+```
+
+## AIME Later
+
+When we want to go back to AIME, use:
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-config none \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 8 \
+  --micro-batch-size 1
 ```
 
 ## Notes
 
 - `train.py --tui` runs the exact chosen config inside the TUI.
 - `train.py` without `--tui` is the better path for debugging crashes.
-- The CLI will ask for `HF_USERNAME` and `HF_TOKEN` if they are missing, then save them into `.env`.
+- The CLI asks for `HF_USERNAME` and `HF_TOKEN` if missing, then saves them into `.env`.
 - TensorBoard is the real source of truth. The TUI is just the live operator surface.

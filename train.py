@@ -5,20 +5,21 @@ import os
 from pathlib import Path
 import traceback
 
-from llmrl.config import DEFAULT_ALGOS, DEFAULT_DATASET, DEFAULT_MODELS, RunConfig
+from llmrl.config import DEFAULT_ALGOS, DEFAULT_DATASET, DEFAULT_DATASET_CONFIG, DEFAULT_MODELS, RunConfig
 from llmrl.runtime import Trainer
 from tui import run_config_with_tui
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Train GRPO/PPO/DPPO on AIME 2025.")
+    parser = argparse.ArgumentParser(description="Train GRPO/PPO/DPPO on verifier-graded math datasets.")
     parser.add_argument("--model", choices=DEFAULT_MODELS, required=True)
     parser.add_argument("--algo", choices=DEFAULT_ALGOS, required=True)
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
+    parser.add_argument("--dataset-config", default="auto")
     parser.add_argument("--dataset-split", default="train")
     parser.add_argument("--rollout-group-size", type=int, default=2)
-    parser.add_argument("--max-prompt-tokens", type=int, default=768)
-    parser.add_argument("--max-new-tokens", type=int, default=96)
+    parser.add_argument("--max-prompt-tokens", type=int, default=512)
+    parser.add_argument("--max-new-tokens", type=int, default=64)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
@@ -38,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete-local-checkpoints", action="store_true")
     parser.add_argument("--resume", default="off")
     parser.add_argument("--cpu-offload", action="store_true")
-    parser.add_argument("--trainer-backend", choices=("unsloth", "transformers"), default="unsloth")
+    parser.add_argument("--trainer-backend", choices=("auto", "unsloth", "transformers"), default="auto")
     parser.add_argument("--finetune-method", choices=("full", "lora", "qlora"), default="qlora")
     parser.add_argument("--lora-r", type=int, default=8)
     parser.add_argument("--lora-alpha", type=int, default=16)
@@ -103,7 +104,9 @@ def make_cli_callback():
                 flush=True,
             )
         elif phase == "dataset_loading":
-            print(f"[data] loading {payload.get('dataset')} [{payload.get('split')}]", flush=True)
+            config = payload.get("dataset_config")
+            config_suffix = f":{config}" if config else ""
+            print(f"[data] loading {payload.get('dataset')}{config_suffix} [{payload.get('split')}]", flush=True)
         elif phase == "dataset_loaded":
             print(f"[data] loaded {payload.get('examples')} examples", flush=True)
         elif phase == "optimizer_ready":
@@ -163,6 +166,15 @@ def make_cli_callback():
     return _callback
 
 
+def normalize_dataset_config(value: str | None, dataset_id: str) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if value.lower() == "auto":
+        return DEFAULT_DATASET_CONFIG if dataset_id == DEFAULT_DATASET else None
+    return None if value.lower() in {"", "none", "null"} else value
+
+
 def main() -> None:
     args = build_parser().parse_args()
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -172,6 +184,7 @@ def main() -> None:
         model_id=args.model,
         algo=args.algo,
         dataset_id=args.dataset,
+        dataset_config=normalize_dataset_config(args.dataset_config, args.dataset),
         dataset_split=args.dataset_split,
         rollout_group_size=args.rollout_group_size,
         max_prompt_tokens=args.max_prompt_tokens,
