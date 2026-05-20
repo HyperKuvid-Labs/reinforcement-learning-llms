@@ -1,127 +1,146 @@
-# Maximum Likelihood Reinforcement Learning — CIFAR-100
+# AIME 2025 RL Comparison for 1B LLMs
 
-A minimal reproduction of the image-classification experiments from the paper:
+This repo compares **GRPO**, **PPO**, and **DPPO** on **AIME 2025** with:
 
-> **Maximum Likelihood Reinforcement Learning**
-> Fahim Tajwar, Guanning Zeng, Yueer Zhou, Yuda Song, Daman Arora, Yiding Jiang, Jeff Schneider, Ruslan Salakhutdinov, Haiwen Feng
-> arXiv:2602.02710 · February 2026
-> [https://arxiv.org/abs/2602.02710](https://arxiv.org/abs/2602.02710)
+- `sapientinc/HRM-Text-1B`
+- `LiquidAI/LFM2.5-1.2B-Thinking`
 
----
+The training objective is binary-answer reward on math completions: a rollout gets reward `1` only when the extracted final answer matches the gold AIME answer after normalization.
 
-## Overview
+## Scope
 
-The paper argues that standard RL methods (like GRPO and REINFORCE) optimise only a **lower-order approximation** of the likelihood over correct rollouts, rather than the likelihood itself. The authors introduce **MaxRL** — a sampling-based framework that interpolates between standard RL and exact maximum likelihood as more sampling compute is allocated, converging to MLE in the infinite-compute limit.
+Main comparison:
+- `GRPO`
+- `PPO`
+- `DPPO` with `top-k` divergence approximation by default
 
-This repo trains a **ResNet-18** on **CIFAR-100** using three advantage estimators side-by-side:
+Additional divergence analysis:
+- `naive` exact divergence, eval-only
+- `binary` approximation
+- `top-k` approximation
 
-| Method | Advantage $\hat{A}(x, y)$ | Notes |
-|---|---|---|
-| **GRPO** | $\dfrac{r(x,y) - \hat{\mu}}{\hat{\sigma}}$ | normalise by std |
-| **REINFORCE** | $r(x,y) - \hat{\mu}$ | subtract mean baseline |
-| **MaxRL** | $\dfrac{r(x,y) - \hat{\mu}}{\hat{\mu}}$ | divide by mean; upweights hard examples |
+Everything is logged to **TensorBoard**. The TUI is only an operator surface; TensorBoard is the system of record for metrics, config, checkpoint events, upload events, and divergence analysis.
 
-where $\hat{\mu} = \frac{1}{K}\sum_{i=1}^{K} r(x, y^{(i)})$ and $\hat{\sigma} = \sqrt{\frac{1}{K}\sum_{i=1}^{K}(r(x,y^{(i)}) - \hat{\mu})^2}$, computed over $K$ Monte-Carlo rollouts sampled from the model's current policy.
+## Models and Dataset
 
-The reward function is binary:
+- Dataset: `test-time-compute/aime_2025`
+- Model 1: `sapientinc/HRM-Text-1B`
+- Model 2: `LiquidAI/LFM2.5-1.2B-Thinking`
 
-$$r(x, y) = \mathbb{1}[y = y^*(x)] = \begin{cases} 1 & \text{if } y = y^*(x) \\ 0 & \text{otherwise} \end{cases}$$
+Notes from the upstream model cards:
+- `sapientinc/HRM-Text-1B` requires `trust_remote_code=True`, and the model card says some setups may need a recent `transformers` build with `hrm_text` support.
+- `LiquidAI/LFM2.5-1.2B-Thinking` is a reasoning model intended for Transformers/vLLM-style text generation.
 
-The RL objective being optimised is:
-
-$$\mathcal{L}_{\text{RL}}(x, y^*; \pi_\theta) = -\mathbb{E}_{y \sim \pi_\theta(\cdot|x)}\left[-\log \pi_\theta(y|x) \cdot \hat{A}(y|x)\right]$$
-
----
-
-## Results
-
-### Experiment Overview
-
-![Experiment Overview](assets/exp.png)
-
-### Validation Accuracy
-
-![Validation Accuracy](assets/val_acc.png)
-
-### Training Loss per Epoch
-
-![Loss per Epoch](assets/loss_epoch.png)
-
-### Training Loss per Step
-
-![Loss per Step](assets/loss_step.png)
-
-### Final Results
-
-![Final Results](assets/res.png)
-
----
+Sources:
+- https://huggingface.co/sapientinc/HRM-Text-1B
+- https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking
+- https://huggingface.co/datasets/test-time-compute/aime_2025
 
 ## Setup
+
+The local environment in this repo previously had a broken CUDA-linked PyTorch import, so bootstrap from scratch:
 
 ```bash
 bash install.sh
 ```
 
----
+If `torch` still fails to import with missing CUDA shared libraries, reinstall PyTorch for your exact CUDA version before running training.
+
+Before the first training or divergence run, the CLI now prompts for:
+- `HF_USERNAME`
+- `HF_TOKEN`
+
+They are saved in a repo-local `.env` file and reused automatically on later runs.
 
 ## Training
 
-**Plain terminal output:**
+Run a single training job:
+
 ```bash
-python train.py
+python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dppo-approx topk \
+  --topk 16 \
+  --save-every 20 \
+  --push-to-hub \
+  --hub-repo your-user/your-repo \
+  --delete-local-checkpoints \
+  --cpu-offload
 ```
 
-**Rich TUI (live progress dashboard):**
+If `--push-to-hub` is set and `--hub-repo` is omitted, the trainer defaults to:
+
+```text
+<HF_USERNAME>/<model-slug>-<algo>
+```
+
+Run GRPO or PPO:
+
+```bash
+python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo grpo
+python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo ppo
+```
+
+Run divergence comparison:
+
+```bash
+python compare_divergence.py --model sapientinc/HRM-Text-1B --approx all
+```
+
+Launch the operator TUI:
+
 ```bash
 python tui.py
 ```
 
-Training runs all three advantage functions sequentially — GRPO → REINFORCE → MaxRL — and logs metrics to TensorBoard under `runs/`.
+## TensorBoard
+
+Every run writes TensorBoard events under `runs/`.
 
 ```bash
-tensorboard --logdir runs/
+tensorboard --logdir runs
 ```
 
----
+Representative scalar tags:
+- `train/loss`
+- `train/reward_mean`
+- `train/reward_std`
+- `train/advantage_mean`
+- `train/advantage_std`
+- `train/clip_fraction`
+- `train/dppo_mask_fraction`
+- `eval/accuracy`
+- `eval/reward_mean`
+- `eval/completion_length`
+- `divergence/binary`
+- `divergence/topk`
+- `divergence/naive_tv`
+- `divergence/naive_kl`
+- `system/tokens_per_sec`
+- `system/step_time`
+- `system/gpu_mem_allocated`
+- `system/gpu_mem_reserved`
+- `system/checkpoint_upload_time`
+- `system/checkpoint_prune_status`
 
-## Generating Plots
+## Approximation Details
 
-After training, export the CSVs from TensorBoard into `data/` (one file per metric per algorithm, named `cifar100_{algo}_{metric}.csv`) and run:
+Binary approximation:
+- collapse the distribution into sampled-token probability vs the rest
 
-```bash
-python graphs.py
-```
+Top-k approximation:
+- keep `TopK(mu)` plus the sampled token and aggregate the rest into `other`
 
-This produces TensorBoard-style dark-theme plots with EMA smoothing for all three metrics: `acc/val`, `loss/epoch`, and `loss/step`.
+Naive approximation:
+- compute divergence on the full vocabulary
+- enabled only for eval/analysis because it is much more expensive
 
----
+## Files
 
-## Config
-
-| Hyperparameter | Value |
-|---|---|
-| Model | ResNet-18 (random init) |
-| Dataset | CIFAR-100 |
-| Epochs | 5 |
-| Batch size | 128 |
-| Rollouts $K$ | 4 |
-| Learning rate | 0.1 (cosine annealed) |
-| Optimizer | SGD + momentum 0.9 |
-| Mixed precision | AMP (fp16) |
-
----
-
-## Citation
-
-```bibtex
-@article{tajwar2026maxrl,
-  title   = {Maximum Likelihood Reinforcement Learning},
-  author  = {Tajwar, Fahim and Zeng, Guanning and Zhou, Yueer and Song, Yuda and
-             Arora, Daman and Jiang, Yiding and Schneider, Jeff and
-             Salakhutdinov, Ruslan and Feng, Haiwen},
-  journal = {arXiv preprint arXiv:2602.02710},
-  year    = {2026},
-  url     = {https://arxiv.org/abs/2602.02710}
-}
-```
+- `train.py`: main CLI for GRPO/PPO/DPPO training
+- `compare_divergence.py`: eval-only divergence comparison
+- `tui.py`: grey/white production-style training console
+- `graphs.py`: plot TensorBoard scalar traces
+- `llmrl/`: training, divergence, dataset, and logging modules
