@@ -634,6 +634,12 @@ class Trainer:
             from huggingface_hub import HfApi
 
             api = HfApi()
+            api.create_repo(
+                repo_id=self.config.hub_repo,
+                repo_type="model",
+                token=self.hf_token,
+                exist_ok=True,
+            )
             api.upload_folder(
                 repo_id=self.config.hub_repo,
                 folder_path=str(self.config.checkpoint_dir),
