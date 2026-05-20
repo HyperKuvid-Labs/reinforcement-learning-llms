@@ -132,7 +132,6 @@ python train.py \
   --dppo-approx topk \
   --topk 8 \
   --save-every 20 \
-  --push-to-hub \
   --hub-repo your-user/your-repo \
   --delete-local-checkpoints \
   --cpu-offload
@@ -144,6 +143,7 @@ This is now intentionally laptop-biased by default:
 - `max_new_tokens` defaults to `96`
 - PPO inner epochs default to `1`
 - `top-k` default is `8`
+- checkpoints are pushed by default unless you pass `--no-push-to-hub`
 
 If you just want to see whether the pipeline survives end to end, use the smoke preset first:
 
@@ -154,7 +154,7 @@ python train.py \
   --smoke-test
 ```
 
-If `--push-to-hub` is set and `--hub-repo` is omitted, the trainer falls back to:
+If `--hub-repo` is omitted, the trainer falls back to:
 
 ```text
 <HF_USERNAME>/<dataset-slug>-<model-slug>-<algo-suffix>

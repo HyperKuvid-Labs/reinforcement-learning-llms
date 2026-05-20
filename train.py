@@ -33,7 +33,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-examples-limit", type=int, default=16)
     parser.add_argument("--save-every", type=int, default=20)
     parser.add_argument("--log-every", type=int, default=1)
-    parser.add_argument("--push-to-hub", action="store_true")
+    parser.add_argument("--push-to-hub", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--hub-repo", default=None)
     parser.add_argument("--delete-local-checkpoints", action="store_true")
     parser.add_argument("--resume", default="off")

@@ -56,7 +56,7 @@ class RunConfig:
     eval_examples_limit: int | None = 16
     save_every: int = 20
     log_every: int = 1
-    push_to_hub: bool = False
+    push_to_hub: bool = True
     hub_repo: str | None = None
     delete_local_checkpoints: bool = False
     resume: str = "off"
