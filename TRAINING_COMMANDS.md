@@ -63,6 +63,8 @@ TUI version:
 
 ## Main Runs: Qwen3.5-4B-Base
 
+These are the `24 GB`-oriented commands. The trainer now microbatches the update pass, but the rollout shape still matters, so keep the default Qwen run at `rk2/512/64` unless you are on a larger GPU.
+
 ### GRPO
 
 ```bash
@@ -72,9 +74,10 @@ TUI version:
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --micro-batch-size 1
 ```
 
 ### PPO
@@ -86,10 +89,11 @@ TUI version:
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --micro-batch-size 1
 ```
 
 ### DPPO top-k
@@ -101,12 +105,13 @@ TUI version:
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
   --ppo-epochs 1 \
   --dppo-approx topk \
-  --topk 16
+  --topk 8 \
+  --micro-batch-size 1
 ```
 
 ### DPPO binary
@@ -118,11 +123,12 @@ TUI version:
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
   --ppo-epochs 1 \
-  --dppo-approx binary
+  --dppo-approx binary \
+  --micro-batch-size 1
 ```
 
 ### DPPO top-k with TUI
@@ -134,12 +140,13 @@ TUI version:
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
   --ppo-epochs 1 \
   --dppo-approx topk \
-  --topk 16 \
+  --topk 8 \
+  --micro-batch-size 1 \
   --tui
 ```
 

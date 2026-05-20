@@ -70,6 +70,7 @@ class RunConfig:
     smoke_test: bool = False
     micro_batch_size: int = 1
     gradient_accumulation_steps: int = 1
+    reward_debug_every: int = 1
     run_name: str = field(default_factory=lambda: datetime.now().strftime("%Y%m%d-%H%M%S"))
     status_file: Path | None = None
     eval_only: bool = False

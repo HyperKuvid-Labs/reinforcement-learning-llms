@@ -19,9 +19,10 @@ TRAILING_PUNCT_RE = re.compile(r"[\s\.\,\:\;\!\?]+$")
 def build_prompt(question: str) -> str:
     return (
         "Solve the following AIME 2025 mathematics problem.\n"
-        "You may think step by step, but the final line must be exactly:\n"
-        "Final Answer: \\boxed{answer}\n"
-        "Use only one boxed final answer.\n\n"
+        "Work through the math, then give exactly one final boxed result.\n"
+        "The final line must be in this format, replacing 123 with the actual answer:\n"
+        "Final Answer: \\boxed{123}\n"
+        "Do not write the word answer inside the box.\n\n"
         f"Problem:\n{question}\n"
     )
 
@@ -53,7 +54,7 @@ def extract_final_answer(text: str) -> str:
     if final_matches:
         candidate = final_matches[-1].strip()
         boxed_candidate = _extract_last_boxed(candidate)
-        return boxed_candidate or candidate
+        return boxed_candidate or TRAILING_PUNCT_RE.sub("", candidate)
 
     numbers = LAST_NUMBER_RE.findall(text)
     if numbers:

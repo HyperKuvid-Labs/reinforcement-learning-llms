@@ -45,6 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--micro-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
+    parser.add_argument("--reward-debug-every", type=int, default=1)
     parser.add_argument("--status-file", type=Path, default=None)
     parser.add_argument("--output-root", type=Path, default=Path("runs"))
     parser.add_argument("--checkpoints-root", type=Path, default=Path("checkpoints"))
@@ -65,6 +66,7 @@ def apply_smoke_preset(args) -> None:
     args.train_examples_limit = 2 if args.train_examples_limit is None else min(args.train_examples_limit, 2)
     args.eval_examples_limit = 2 if args.eval_examples_limit is None else min(args.eval_examples_limit, 2)
     args.save_every = min(args.save_every, 2)
+    args.reward_debug_every = 1
 
 
 def make_cli_callback():
@@ -117,10 +119,21 @@ def make_cli_callback():
                 f"group={payload.get('group_size')}",
                 flush=True,
             )
+        elif phase == "sample_debug":
+            print(
+                f"[step {step}] sample | reward={payload.get('reward')} "
+                f"pred={payload.get('pred_answer')} gold={payload.get('gold_answer')} "
+                f"text={payload.get('completion_preview')}",
+                flush=True,
+            )
         elif phase == "backward":
             print(f"[step {step}] backward | ppo_epoch={payload.get('ppo_epoch')}", flush=True)
         elif phase == "stats_ready":
-            print(f"[step {step}] stats ready | seq_steps={payload.get('sequence_steps')}", flush=True)
+            print(
+                f"[step {step}] stats ready | seq_steps={payload.get('sequence_steps')} "
+                f"micro={payload.get('micro_batch_size', '-')}x{payload.get('micro_batches', '-')}",
+                flush=True,
+            )
         elif phase == "saving":
             print(f"[step {step}] saving checkpoint", flush=True)
         elif phase == "uploading":
@@ -188,6 +201,7 @@ def main() -> None:
         smoke_test=args.smoke_test,
         micro_batch_size=args.micro_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
+        reward_debug_every=args.reward_debug_every,
         status_file=args.status_file,
         output_root=args.output_root,
         checkpoints_root=args.checkpoints_root,

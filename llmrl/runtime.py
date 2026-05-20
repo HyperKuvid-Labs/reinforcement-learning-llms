@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
 
-from .aime import build_prompt, compute_binary_reward
+from .aime import build_prompt, compute_binary_reward, extract_final_answer, normalize_answer
 from .algorithms import LossBundle, compute_group_advantages, dppo_loss, ppo_loss
 from .auth import ensure_hf_credentials
 from .config import RunConfig
@@ -205,6 +205,8 @@ class Trainer:
             self.config.model_id,
             **self._build_model_load_kwargs(torch, BitsAndBytesConfig),
         )
+        if hasattr(model, "config"):
+            model.config.use_cache = False
         self._emit(
             "model_loaded",
             cuda_available=bool(torch.cuda.is_available()),
@@ -282,6 +284,8 @@ class Trainer:
     def _generate_rollouts(self, torch, model, tokenizer, model_inputs, answers):
         batch_size = model_inputs["input_ids"].shape[0]
         device = self._device_of(model)
+        needs_old_scores = self.config.algo in {"ppo", "dppo"}
+        needs_dppo_stats = self.config.algo == "dppo"
         repeated = {
             key: value.repeat_interleave(self.config.rollout_group_size, dim=0).to(device)
             for key, value in model_inputs.items()
@@ -294,7 +298,7 @@ class Trainer:
             top_p=self.config.top_p,
             max_new_tokens=self.config.max_new_tokens,
             return_dict_in_generate=True,
-            output_scores=True,
+            output_scores=needs_old_scores,
             pad_token_id=tokenizer.pad_token_id,
         )
         sequences = generation.sequences
@@ -304,6 +308,9 @@ class Trainer:
         expanded_answers = []
         for answer in answers:
             expanded_answers.extend([answer] * self.config.rollout_group_size)
+        extracted_answers = [extract_final_answer(text) for text in decoded]
+        normalized_predictions = [normalize_answer(answer) for answer in extracted_answers]
+        normalized_answers = [normalize_answer(answer) for answer in expanded_answers]
         rewards = torch.tensor(
             [compute_binary_reward(text, answer) for text, answer in zip(decoded, expanded_answers)],
             device=device,
@@ -314,14 +321,16 @@ class Trainer:
         old_chosen_probs = []
         old_topk_indices = []
         old_topk_probs = []
-        for step_scores, sampled_tokens in zip(generation.scores, completions.transpose(0, 1)):
-            probs = step_scores.softmax(dim=-1)
-            chosen_probs = probs.gather(1, sampled_tokens.unsqueeze(-1)).squeeze(-1)
-            topk_probs, topk_indices = probs.topk(k=min(self.config.dppo_topk, probs.shape[-1]), dim=-1)
-            old_logprobs.append(chosen_probs.clamp_min(1e-12).log())
-            old_chosen_probs.append(chosen_probs)
-            old_topk_indices.append(topk_indices)
-            old_topk_probs.append(topk_probs)
+        if needs_old_scores:
+            for step_scores, sampled_tokens in zip(generation.scores, completions.transpose(0, 1)):
+                probs = step_scores.softmax(dim=-1)
+                chosen_probs = probs.gather(1, sampled_tokens.unsqueeze(-1)).squeeze(-1)
+                old_logprobs.append(chosen_probs.clamp_min(1e-12).log())
+                if needs_dppo_stats:
+                    topk_probs, topk_indices = probs.topk(k=min(self.config.dppo_topk, probs.shape[-1]), dim=-1)
+                    old_chosen_probs.append(chosen_probs)
+                    old_topk_indices.append(topk_indices)
+                    old_topk_probs.append(topk_probs)
 
         rollout = {
             "prompt_len": prompt_len,
@@ -329,65 +338,79 @@ class Trainer:
             "sequences": sequences,
             "completions": completions,
             "decoded": decoded,
+            "extracted_answers": extracted_answers,
+            "normalized_predictions": normalized_predictions,
+            "normalized_answers": normalized_answers,
             "rewards": rewards,
-            "old_logprobs": torch.stack(old_logprobs, dim=1),
-            "old_chosen_probs": torch.stack(old_chosen_probs, dim=1),
-            "old_topk_indices": torch.stack(old_topk_indices, dim=1),
-            "old_topk_probs": torch.stack(old_topk_probs, dim=1),
         }
+        if needs_old_scores:
+            rollout["old_logprobs"] = torch.stack(old_logprobs, dim=1)
+        if needs_dppo_stats:
+            rollout["old_chosen_probs"] = torch.stack(old_chosen_probs, dim=1)
+            rollout["old_topk_indices"] = torch.stack(old_topk_indices, dim=1)
+            rollout["old_topk_probs"] = torch.stack(old_topk_probs, dim=1)
+        del generation
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         return rollout
 
-    def _current_policy_stats(self, torch, model, rollout):
+    def _current_policy_stats(self, torch, model, rollout, row_slice=None, include_full_probs: bool = False):
         device = self._device_of(model)
-        sequences = rollout["sequences"].to(device)
+        row_slice = row_slice if row_slice is not None else slice(None)
+        sequences = rollout["sequences"][row_slice].to(device)
         prompt_len = rollout["prompt_len"]
         attention_mask = (sequences[:, :-1] != rollout["pad_token_id"]).long()
-        outputs = model(input_ids=sequences[:, :-1], attention_mask=attention_mask)
+        outputs = model(input_ids=sequences[:, :-1], attention_mask=attention_mask, use_cache=False)
         logits = outputs.logits[:, prompt_len - 1 :, :]
         target_tokens = sequences[:, prompt_len:]
         current_logprobs = logits.log_softmax(dim=-1).gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
-        current_probs = logits.softmax(dim=-1)
-        chosen_probs = current_probs.gather(2, target_tokens.unsqueeze(-1)).squeeze(-1)
+        stats = {"current_logprobs": current_logprobs}
+        if self.config.algo == "dppo":
+            chosen_probs = current_logprobs.exp()
+            stats["chosen_probs"] = chosen_probs
+            if self.config.dppo_approx == "topk" or include_full_probs:
+                current_probs = logits.softmax(dim=-1)
+                if include_full_probs:
+                    stats["current_probs"] = current_probs
+                if self.config.dppo_approx == "topk":
+                    reduced_old = []
+                    reduced_current = []
+                    for step in range(target_tokens.shape[1]):
+                        reduced_old.append(
+                            old_reduced_distribution(
+                                rollout["old_topk_indices"][row_slice, step, :],
+                                rollout["old_topk_probs"][row_slice, step, :],
+                                target_tokens[:, step],
+                                rollout["old_chosen_probs"][row_slice, step],
+                            )
+                        )
+                        reduced_current.append(
+                            current_reduced_distribution(
+                                rollout["old_topk_indices"][row_slice, step, :],
+                                target_tokens[:, step],
+                                current_probs[:, step, :],
+                            )
+                        )
+                    stats["reduced_old"] = torch.stack(reduced_old, dim=1)
+                    stats["reduced_current"] = torch.stack(reduced_current, dim=1)
+        return stats
 
-        reduced_old = []
-        reduced_current = []
-        for step in range(target_tokens.shape[1]):
-            reduced_old.append(
-                old_reduced_distribution(
-                    rollout["old_topk_indices"][:, step, :],
-                    rollout["old_topk_probs"][:, step, :],
-                    target_tokens[:, step],
-                    rollout["old_chosen_probs"][:, step],
-                )
-            )
-            reduced_current.append(
-                current_reduced_distribution(
-                    rollout["old_topk_indices"][:, step, :],
-                    target_tokens[:, step],
-                    current_probs[:, step, :],
-                )
-            )
-        return {
-            "current_logprobs": current_logprobs,
-            "chosen_probs": chosen_probs,
-            "current_probs": current_probs,
-            "reduced_old": torch.stack(reduced_old, dim=1),
-            "reduced_current": torch.stack(reduced_current, dim=1),
-        }
-
-    def _loss_for_algo(self, torch, rollout, stats):
-        batch = rollout["rewards"].shape[0]
+    def _loss_for_algo(self, torch, rollout, stats, row_slice=None, advantages=None):
+        row_slice = row_slice if row_slice is not None else slice(None)
+        total_rows = rollout["sequences"].shape[0]
         steps = stats["current_logprobs"].shape[1]
-        advantages = compute_group_advantages(
-            rollout["rewards"], "grpo" if self.config.algo == "grpo" else "ppo"
-        )
-        advantages = advantages.reshape(-1, 1).expand(batch * self.config.rollout_group_size, steps)
-        old_logprobs = rollout["old_logprobs"]
+        if advantages is None:
+            advantages = compute_group_advantages(
+                rollout["rewards"], "grpo" if self.config.algo == "grpo" else "ppo"
+            )
+            advantages = advantages.reshape(total_rows, 1).expand(total_rows, steps)
+        advantages = advantages[row_slice]
         current_logprobs = stats["current_logprobs"]
 
         if self.config.algo == "grpo":
             loss = -(current_logprobs * advantages).mean()
             return LossBundle(loss=loss, metrics={})
+        old_logprobs = rollout["old_logprobs"][row_slice]
         if self.config.algo == "ppo":
             return ppo_loss(current_logprobs, old_logprobs, advantages, self.config.ppo_clip_eps)
         return dppo_loss(
@@ -395,12 +418,60 @@ class Trainer:
             old_logprobs=old_logprobs,
             advantages=advantages,
             current_chosen_probs=stats["chosen_probs"],
-            old_chosen_probs=rollout["old_chosen_probs"],
-            current_topk_probs=stats["reduced_current"],
-            old_topk_probs=stats["reduced_old"],
+            old_chosen_probs=rollout["old_chosen_probs"][row_slice],
+            current_topk_probs=stats.get("reduced_current"),
+            old_topk_probs=stats.get("reduced_old"),
             approx=self.config.dppo_approx,
             delta=self.config.dppo_delta,
         )
+
+    def _policy_update_epoch(self, torch, model, optimizer, rollout) -> dict[str, float]:
+        total_rows = int(rollout["sequences"].shape[0])
+        steps = int(rollout["completions"].shape[1])
+        micro_batch_size = max(1, int(self.config.micro_batch_size))
+        micro_batches = (total_rows + micro_batch_size - 1) // micro_batch_size
+        mode = "grpo" if self.config.algo == "grpo" else "ppo"
+        advantages = compute_group_advantages(rollout["rewards"], mode).reshape(total_rows, 1).expand(total_rows, steps)
+
+        optimizer.zero_grad(set_to_none=True)
+        loss_total = 0.0
+        metric_totals: dict[str, float] = {}
+        for start in range(0, total_rows, micro_batch_size):
+            end = min(total_rows, start + micro_batch_size)
+            row_slice = slice(start, end)
+            weight = (end - start) / total_rows
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            stats = self._current_policy_stats(torch, model, rollout, row_slice=row_slice)
+            bundle = self._loss_for_algo(torch, rollout, stats, row_slice=row_slice, advantages=advantages)
+            self._assert_finite_tensor(torch, bundle.loss.detach(), "loss")
+            (bundle.loss * weight).backward()
+            loss_total += float(bundle.loss.detach().item()) * weight
+            for key, value in bundle.metrics.items():
+                metric_totals[key] = metric_totals.get(key, 0.0) + float(value) * weight
+            del stats, bundle
+
+        self._emit(
+            "stats_ready",
+            sequence_steps=steps,
+            micro_batch_size=micro_batch_size,
+            micro_batches=micro_batches,
+        )
+        trainable = self._trainable_parameters(model)
+        grad_norm = torch.nn.utils.clip_grad_norm_(trainable, self.config.max_grad_norm)
+        if not torch.isfinite(grad_norm):
+            raise RuntimeError("non-finite gradient norm detected before optimizer step")
+        optimizer.step()
+        self._assert_finite_trainable_params(torch, model)
+
+        metrics = {
+            "train/loss": loss_total,
+            "train/advantage_mean": float(advantages.mean().item()),
+            "train/advantage_std": float(advantages.std(unbiased=False).item()),
+            "train/grad_norm": float(grad_norm.item()),
+        }
+        metrics.update(metric_totals)
+        return metrics
 
     def _save_trainer_state(self, torch, model, optimizer) -> None:
         self.config.checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -481,41 +552,34 @@ class Trainer:
                     completion_tokens=int(rollout["completions"].numel()),
                     group_size=self.config.rollout_group_size,
                 )
+                if self.config.reward_debug_every and self.global_step % self.config.reward_debug_every == 0:
+                    preview = " ".join(str(rollout["decoded"][0]).split())[:240]
+                    self._emit(
+                        "sample_debug",
+                        reward=float(rollout["rewards"].reshape(-1)[0].item()),
+                        pred_answer=rollout["normalized_predictions"][0],
+                        gold_answer=rollout["normalized_answers"][0],
+                        completion_preview=preview,
+                    )
                 reward_mean = float(rollout["rewards"].mean().item())
                 reward_std = float(rollout["rewards"].std(unbiased=False).item())
+                reward_nonzero = float((rollout["rewards"] > 0).float().mean().item())
 
                 step_metrics: dict[str, float] = {
                     "train/reward_mean": reward_mean,
                     "train/reward_std": reward_std,
+                    "train/reward_nonzero_fraction": reward_nonzero,
                     "eval/reward_mean": reward_mean,
                 }
                 for epoch_idx in range(self.config.ppo_epochs):
                     self._emit("backward", ppo_epoch=epoch_idx + 1)
-                    stats = self._current_policy_stats(torch, model, rollout)
-                    self._emit("stats_ready", sequence_steps=int(stats["current_logprobs"].shape[1]))
-                    bundle = self._loss_for_algo(torch, rollout, stats)
-                    self._assert_finite_tensor(torch, bundle.loss.detach(), "loss")
-                    optimizer.zero_grad()
-                    bundle.loss.backward()
-                    grad_norm = torch.nn.utils.clip_grad_norm_(self._trainable_parameters(model), self.config.max_grad_norm)
-                    if not torch.isfinite(grad_norm):
-                        raise RuntimeError("non-finite gradient norm detected before optimizer step")
-                    optimizer.step()
-                    self._assert_finite_trainable_params(torch, model)
-
-                    adv = compute_group_advantages(
-                        rollout["rewards"], "grpo" if self.config.algo == "grpo" else "ppo"
-                    )
+                    epoch_metrics = self._policy_update_epoch(torch, model, optimizer, rollout)
                     step_metrics.update(
                         {
-                            "train/loss": float(bundle.loss.item()),
-                            "train/advantage_mean": float(adv.mean().item()),
-                            "train/advantage_std": float(adv.std(unbiased=False).item()),
-                            "train/grad_norm": float(grad_norm.item()),
                             "eval/accuracy": reward_mean,
                             "eval/completion_length": float(rollout["completions"].shape[1]),
                             "system/step_time": perf_counter() - rollout_start,
-                            **bundle.metrics,
+                            **epoch_metrics,
                         }
                     )
                     if torch.cuda.is_available():
@@ -551,12 +615,12 @@ class Trainer:
         example = dataset[0]
         _, answers, model_inputs = self._prepare_batch(torch, tokenizer, [example])
         rollout = self._generate_rollouts(torch, model, tokenizer, model_inputs, answers)
-        before = self._current_policy_stats(torch, model, rollout)
+        before = self._current_policy_stats(torch, model, rollout, include_full_probs=True)
         bundle = self._loss_for_algo(torch, rollout, before)
         optimizer.zero_grad()
         bundle.loss.backward()
         optimizer.step()
-        stats = self._current_policy_stats(torch, model, rollout)
+        stats = self._current_policy_stats(torch, model, rollout, include_full_probs=True)
 
         flat_mu = rollout["old_chosen_probs"].reshape(-1)
         flat_pi = stats["chosen_probs"].reshape(-1)
