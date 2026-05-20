@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--weight-decay", type=float, default=0.01)
+    parser.add_argument("--max-grad-norm", type=float, default=1.0)
     parser.add_argument("--ppo-clip-eps", type=float, default=0.2)
     parser.add_argument("--ppo-epochs", type=int, default=1)
     parser.add_argument("--dppo-delta", type=float, default=0.03)
@@ -92,6 +93,12 @@ def make_cli_callback():
                 f"trainable_params={payload.get('trainable_params')}",
                 flush=True,
             )
+        elif phase == "hparam_adjustment":
+            print(
+                f"[hparam] {payload.get('field')} {payload.get('old_value')} -> {payload.get('new_value')} "
+                f"| {payload.get('reason')}",
+                flush=True,
+            )
         elif phase == "dataset_loading":
             print(f"[data] loading {payload.get('dataset')} [{payload.get('split')}]", flush=True)
         elif phase == "dataset_loaded":
@@ -128,6 +135,7 @@ def make_cli_callback():
             print(
                 f"[step {step}] reward={float(payload.get('train/reward_mean', 0.0)):.4f} "
                 f"loss={float(payload.get('train/loss', 0.0)):.4f} "
+                f"grad={float(payload.get('train/grad_norm', 0.0)):.4f} "
                 f"tps={float(payload.get('system/tokens_per_sec', 0.0)):.2f}",
                 flush=True,
             )
@@ -158,6 +166,7 @@ def main() -> None:
         top_p=args.top_p,
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
+        max_grad_norm=args.max_grad_norm,
         ppo_clip_eps=args.ppo_clip_eps,
         ppo_epochs=args.ppo_epochs,
         dppo_delta=args.dppo_delta,

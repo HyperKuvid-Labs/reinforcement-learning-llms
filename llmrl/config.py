@@ -46,6 +46,7 @@ class RunConfig:
     top_p: float = 0.95
     learning_rate: float = 5e-6
     weight_decay: float = 0.01
+    max_grad_norm: float = 1.0
     ppo_clip_eps: float = 0.2
     dppo_delta: float = 0.03
     dppo_approx: str = "topk"

@@ -101,9 +101,10 @@ class Trainer:
             self.config.finetune_method = "lora"
 
     def _build_model_load_kwargs(self, torch, BitsAndBytesConfig):
+        use_bf16 = bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported())
         kwargs = {
             "trust_remote_code": True,
-            "dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "dtype": torch.bfloat16 if use_bf16 else (torch.float16 if torch.cuda.is_available() else torch.float32),
             "low_cpu_mem_usage": True,
         }
         if self.config.finetune_method == "qlora":
@@ -111,7 +112,7 @@ class Trainer:
                 load_in_4bit=True,
                 bnb_4bit_quant_type="nf4",
                 bnb_4bit_use_double_quant=True,
-                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_compute_dtype=torch.bfloat16 if use_bf16 else torch.float16,
             )
         if self.config.cpu_offload:
             kwargs["device_map"] = "auto"
@@ -208,6 +209,7 @@ class Trainer:
             "model_loaded",
             cuda_available=bool(torch.cuda.is_available()),
             model_device=str(self._device_of(model)),
+            bf16=bool(torch.cuda.is_available() and torch.cuda.is_bf16_supported()),
         )
         if hasattr(model, "gradient_checkpointing_enable"):
             model.gradient_checkpointing_enable()
@@ -237,12 +239,32 @@ class Trainer:
         self.tb.add_text("run/hf_username", username, step=0)
         return username, token
 
+    def _normalize_full_training_hparams(self) -> None:
+        if self.config.finetune_method == "full" and self.config.learning_rate >= 5e-6:
+            self._emit(
+                "hparam_adjustment",
+                field="learning_rate",
+                old_value=self.config.learning_rate,
+                new_value=1e-6,
+                reason="full finetune is numerically unstable at the higher default lr",
+            )
+            self.config.learning_rate = 1e-6
+
     @staticmethod
     def _device_of(model):
         return next(model.parameters()).device
 
     def _trainable_parameters(self, model):
         return [param for param in model.parameters() if param.requires_grad]
+
+    def _assert_finite_tensor(self, torch, tensor, label: str) -> None:
+        if not torch.isfinite(tensor).all():
+            raise RuntimeError(f"non-finite tensor detected in {label}")
+
+    def _assert_finite_trainable_params(self, torch, model) -> None:
+        for name, param in model.named_parameters():
+            if param.requires_grad and not torch.isfinite(param).all():
+                raise RuntimeError(f"non-finite parameter detected after optimizer step: {name}")
 
     def _prepare_batch(self, torch, tokenizer, examples):
         prompts = [build_prompt(example["question"]) for example in examples]
@@ -423,6 +445,7 @@ class Trainer:
             self.hf_username, self.hf_token = self._prepare_hf_auth()
             if self.config.push_to_hub and not self.config.hub_repo:
                 self.config.hub_repo = self.config.default_hub_repo(self.hf_username)
+            self._normalize_full_training_hparams()
             torch, tokenizer, model, dataset, _ = self._load_components()
             optimizer = torch.optim.AdamW(
                 self._trainable_parameters(model),
@@ -471,9 +494,14 @@ class Trainer:
                     stats = self._current_policy_stats(torch, model, rollout)
                     self._emit("stats_ready", sequence_steps=int(stats["current_logprobs"].shape[1]))
                     bundle = self._loss_for_algo(torch, rollout, stats)
+                    self._assert_finite_tensor(torch, bundle.loss.detach(), "loss")
                     optimizer.zero_grad()
                     bundle.loss.backward()
+                    grad_norm = torch.nn.utils.clip_grad_norm_(self._trainable_parameters(model), self.config.max_grad_norm)
+                    if not torch.isfinite(grad_norm):
+                        raise RuntimeError("non-finite gradient norm detected before optimizer step")
                     optimizer.step()
+                    self._assert_finite_trainable_params(torch, model)
 
                     adv = compute_group_advantages(
                         rollout["rewards"], "grpo" if self.config.algo == "grpo" else "ppo"
@@ -483,6 +511,7 @@ class Trainer:
                             "train/loss": float(bundle.loss.item()),
                             "train/advantage_mean": float(adv.mean().item()),
                             "train/advantage_std": float(adv.std(unbiased=False).item()),
+                            "train/grad_norm": float(grad_norm.item()),
                             "eval/accuracy": reward_mean,
                             "eval/completion_length": float(rollout["completions"].shape[1]),
                             "system/step_time": perf_counter() - rollout_start,
