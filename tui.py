@@ -134,6 +134,24 @@ def run_training(queue_runs: list[RunConfig], state: DashboardState, events: Que
         trainer.train()
 
 
+def run_single_training(run: RunConfig, state: DashboardState, events: Queue) -> None:
+    trainer = Trainer(run, callback=events.put)
+    trainer.train()
+
+
+def run_config_with_tui(run: RunConfig) -> None:
+    state = DashboardState([run])
+    events: Queue = Queue()
+    worker = threading.Thread(target=run_single_training, args=(run, state, events), daemon=True)
+    worker.start()
+
+    with Live(build_layout(state), console=console, refresh_per_second=4, screen=True) as live:
+        while worker.is_alive() or not events.empty():
+            while not events.empty():
+                state.update(events.get())
+            live.update(build_layout(state))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Grey/white TUI for queued training runs.")
     parser.add_argument("--status-dir", type=Path, default=Path(".runtime"))

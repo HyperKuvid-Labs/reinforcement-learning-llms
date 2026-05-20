@@ -18,6 +18,7 @@ def main() -> None:
         model_id=args.model,
         algo="dppo",
         dataset_id=args.dataset,
+        dataset_split="test",
         dppo_approx="topk",
         dppo_topk=args.topk,
         eval_only=True,

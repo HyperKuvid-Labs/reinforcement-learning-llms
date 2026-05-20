@@ -127,8 +127,10 @@ python train.py \
   --model sapientinc/HRM-Text-1B \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
   --dppo-approx topk \
-  --topk 16 \
+  --topk 8 \
   --save-every 20 \
   --push-to-hub \
   --hub-repo your-user/your-repo \
@@ -136,11 +138,38 @@ python train.py \
   --cpu-offload
 ```
 
+This is now intentionally laptop-biased by default:
+- `qlora` is the default finetune mode
+- rollout group defaults to `2`
+- `max_new_tokens` defaults to `96`
+- PPO inner epochs default to `1`
+- `top-k` default is `8`
+
+If you just want to see whether the pipeline survives end to end, use the smoke preset first:
+
+```bash
+python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --smoke-test
+```
+
 If `--push-to-hub` is set and `--hub-repo` is omitted, the trainer falls back to:
 
 ```text
-<HF_USERNAME>/<model-slug>-<algo>
+<HF_USERNAME>/<dataset-slug>-<model-slug>-<algo-suffix>
 ```
+
+Examples:
+
+```text
+yourname/aime-2025-hrm-text-1b-grpo-rk2-qlora
+yourname/aime-2025-hrm-text-1b-ppo-rk2-qlora-clip0p2
+yourname/aime-2025-hrm-text-1b-dppo-rk2-qlora-topk-topk8-delta0p03
+yourname/aime-2025-lfm2-5-1-2b-thinking-dppo-rk2-qlora-topk-topk8-delta0p03
+```
+
+So by default the naming includes the dataset, model, algorithm, rollout-group `k`, and any algorithm-specific settings that matter for the run.
 
 Other examples:
 

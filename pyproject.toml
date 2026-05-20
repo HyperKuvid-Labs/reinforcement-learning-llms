@@ -5,9 +5,11 @@ description = "GRPO vs PPO vs DPPO comparison on AIME 2025."
 requires-python = ">=3.11"
 dependencies = [
   "accelerate>=1.6.0",
+  "bitsandbytes>=0.45.0",
   "datasets>=3.5.0",
   "huggingface_hub>=0.32.0",
   "pandas>=2.2.3",
+  "peft>=0.15.0",
   "plotly>=6.0.1",
   "rich>=14.0.0",
   "tensorboard>=2.19.0",

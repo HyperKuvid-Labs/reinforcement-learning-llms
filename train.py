@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 
 from llmrl.config import DEFAULT_ALGOS, DEFAULT_DATASET, DEFAULT_MODELS, RunConfig
 from llmrl.runtime import Trainer
+from tui import run_config_with_tui
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -12,19 +14,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model", choices=DEFAULT_MODELS, required=True)
     parser.add_argument("--algo", choices=DEFAULT_ALGOS, required=True)
     parser.add_argument("--dataset", default=DEFAULT_DATASET)
-    parser.add_argument("--dataset-split", default="test")
-    parser.add_argument("--rollout-group-size", type=int, default=4)
-    parser.add_argument("--max-prompt-tokens", type=int, default=1024)
-    parser.add_argument("--max-new-tokens", type=int, default=256)
+    parser.add_argument("--dataset-split", default="train")
+    parser.add_argument("--rollout-group-size", type=int, default=2)
+    parser.add_argument("--max-prompt-tokens", type=int, default=768)
+    parser.add_argument("--max-new-tokens", type=int, default=96)
     parser.add_argument("--temperature", type=float, default=0.7)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument("--learning-rate", type=float, default=5e-6)
     parser.add_argument("--weight-decay", type=float, default=0.01)
     parser.add_argument("--ppo-clip-eps", type=float, default=0.2)
-    parser.add_argument("--ppo-epochs", type=int, default=2)
+    parser.add_argument("--ppo-epochs", type=int, default=1)
     parser.add_argument("--dppo-delta", type=float, default=0.03)
     parser.add_argument("--dppo-approx", choices=("binary", "topk"), default="topk")
-    parser.add_argument("--topk", type=int, default=16)
+    parser.add_argument("--topk", type=int, default=8)
     parser.add_argument("--train-examples-limit", type=int, default=None)
     parser.add_argument("--eval-examples-limit", type=int, default=16)
     parser.add_argument("--save-every", type=int, default=20)
@@ -34,17 +36,40 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delete-local-checkpoints", action="store_true")
     parser.add_argument("--resume", default="off")
     parser.add_argument("--cpu-offload", action="store_true")
+    parser.add_argument("--finetune-method", choices=("full", "lora", "qlora"), default="qlora")
+    parser.add_argument("--lora-r", type=int, default=8)
+    parser.add_argument("--lora-alpha", type=int, default=16)
+    parser.add_argument("--lora-dropout", type=float, default=0.05)
+    parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--micro-batch-size", type=int, default=1)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--status-file", type=Path, default=None)
     parser.add_argument("--output-root", type=Path, default=Path("runs"))
     parser.add_argument("--checkpoints-root", type=Path, default=Path("checkpoints"))
+    parser.add_argument("--offload-root", type=Path, default=Path(".offload"))
     parser.add_argument("--eval-only", action="store_true")
+    parser.add_argument("--tui", action="store_true")
     return parser
+
+
+def apply_smoke_preset(args) -> None:
+    args.finetune_method = "qlora"
+    args.cpu_offload = True
+    args.rollout_group_size = 1
+    args.max_prompt_tokens = min(args.max_prompt_tokens, 384)
+    args.max_new_tokens = min(args.max_new_tokens, 32)
+    args.ppo_epochs = 1
+    args.topk = min(args.topk, 4)
+    args.train_examples_limit = 2 if args.train_examples_limit is None else min(args.train_examples_limit, 2)
+    args.eval_examples_limit = 2 if args.eval_examples_limit is None else min(args.eval_examples_limit, 2)
+    args.save_every = min(args.save_every, 2)
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+    if args.smoke_test:
+        apply_smoke_preset(args)
     config = RunConfig(
         model_id=args.model,
         algo=args.algo,
@@ -71,17 +96,26 @@ def main() -> None:
         delete_local_checkpoints=args.delete_local_checkpoints,
         resume=args.resume,
         cpu_offload=args.cpu_offload,
+        finetune_method=args.finetune_method,
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+        smoke_test=args.smoke_test,
         micro_batch_size=args.micro_batch_size,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         status_file=args.status_file,
         output_root=args.output_root,
         checkpoints_root=args.checkpoints_root,
+        offload_root=args.offload_root,
         eval_only=args.eval_only,
     )
-    trainer = Trainer(config)
     if args.eval_only:
+        trainer = Trainer(config)
         trainer.compare_divergence()
+    elif args.tui:
+        run_config_with_tui(config)
     else:
+        trainer = Trainer(config)
         trainer.train()
 
 

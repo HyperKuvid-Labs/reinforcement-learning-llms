@@ -8,7 +8,9 @@ uv pip install \
   "torch>=2.4.0" \
   datasets \
   accelerate \
+  bitsandbytes \
   huggingface_hub \
+  peft \
   tensorboard \
   rich \
   plotly \

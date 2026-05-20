@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 from dataclasses import asdict
 from pathlib import Path
@@ -35,13 +36,24 @@ class StatusSink:
 
 
 def _import_stack():
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     import torch
-    from accelerate import Accelerator
     from datasets import load_dataset
     from huggingface_hub import HfApi
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-    return torch, Accelerator, load_dataset, HfApi, AutoModelForCausalLM, AutoTokenizer
+    return (
+        torch,
+        load_dataset,
+        HfApi,
+        AutoModelForCausalLM,
+        AutoTokenizer,
+        BitsAndBytesConfig,
+        LoraConfig,
+        get_peft_model,
+        prepare_model_for_kbit_training,
+    )
 
 
 class Trainer:
@@ -72,9 +84,108 @@ class Trainer:
     def _trainer_state_path(self) -> Path:
         return self.config.checkpoint_dir / "trainer_state.pt"
 
+    def _offload_dir(self) -> Path:
+        path = self.config.offload_root / self.config.slug
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def _normalize_finetune_method(self) -> None:
+        if self.config.finetune_method == "qlora" and "HRM-Text-1B" in self.config.model_id:
+            self._emit(
+                "adapter_fallback",
+                requested_method="qlora",
+                fallback_method="lora",
+                reason="hrm remote-code architecture is not stable with the generic qlora injection path",
+            )
+            self.config.finetune_method = "lora"
+
+    def _build_model_load_kwargs(self, torch, BitsAndBytesConfig):
+        kwargs = {
+            "trust_remote_code": True,
+            "dtype": torch.float16 if torch.cuda.is_available() else torch.float32,
+            "low_cpu_mem_usage": True,
+        }
+        if self.config.finetune_method == "qlora":
+            kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_compute_dtype=torch.float16,
+            )
+        if self.config.cpu_offload:
+            kwargs["device_map"] = "auto"
+            kwargs["offload_folder"] = str(self._offload_dir())
+            kwargs["offload_state_dict"] = True
+        elif torch.cuda.is_available():
+            kwargs["device_map"] = {"": 0}
+        return kwargs
+
+    @staticmethod
+    def _lora_target_modules():
+        return [
+            "q_proj",
+            "k_proj",
+            "v_proj",
+            "o_proj",
+            "gate_proj",
+            "up_proj",
+            "down_proj",
+        ]
+
+    def _apply_adapter_training(self, model, LoraConfig, get_peft_model, prepare_model_for_kbit_training):
+        if self.config.finetune_method == "full":
+            return model
+        requested_method = self.config.finetune_method
+        try:
+            if requested_method == "qlora":
+                model = prepare_model_for_kbit_training(model)
+            peft_config = LoraConfig(
+                r=self.config.lora_r,
+                lora_alpha=self.config.lora_alpha,
+                lora_dropout=self.config.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=self._lora_target_modules(),
+            )
+            model = get_peft_model(model, peft_config)
+            return model
+        except Exception as exc:
+            if requested_method != "qlora":
+                raise
+            self._emit(
+                "adapter_fallback",
+                requested_method=requested_method,
+                fallback_method="lora",
+                reason=str(exc),
+            )
+            self.config.finetune_method = "lora"
+            if hasattr(model, "is_loaded_in_4bit") and model.is_loaded_in_4bit:
+                raise RuntimeError(
+                    "qlora injection failed for this model after 4-bit load. rerun with --finetune-method lora."
+                ) from exc
+            peft_config = LoraConfig(
+                r=self.config.lora_r,
+                lora_alpha=self.config.lora_alpha,
+                lora_dropout=self.config.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=self._lora_target_modules(),
+            )
+            return get_peft_model(model, peft_config)
+
     def _load_components(self):
-        torch, Accelerator, load_dataset, HfApi, AutoModelForCausalLM, AutoTokenizer = _import_stack()
-        accelerator = Accelerator(gradient_accumulation_steps=self.config.gradient_accumulation_steps)
+        self._normalize_finetune_method()
+        (
+            torch,
+            load_dataset,
+            HfApi,
+            AutoModelForCausalLM,
+            AutoTokenizer,
+            BitsAndBytesConfig,
+            LoraConfig,
+            get_peft_model,
+            prepare_model_for_kbit_training,
+        ) = _import_stack()
         tokenizer = AutoTokenizer.from_pretrained(
             self.config.model_id,
             trust_remote_code=True,
@@ -83,15 +194,22 @@ class Trainer:
             tokenizer.pad_token = tokenizer.eos_token
         model = AutoModelForCausalLM.from_pretrained(
             self.config.model_id,
-            trust_remote_code=True,
-            torch_dtype="auto",
+            **self._build_model_load_kwargs(torch, BitsAndBytesConfig),
         )
         if hasattr(model, "gradient_checkpointing_enable"):
             model.gradient_checkpointing_enable()
+        model = self._apply_adapter_training(
+            model,
+            LoraConfig,
+            get_peft_model,
+            prepare_model_for_kbit_training,
+        )
+        if not self.config.cpu_offload and torch.cuda.is_available():
+            model = model.to("cuda")
         dataset = load_dataset(self.config.dataset_id, split=self.config.dataset_split)
         if self.config.train_examples_limit:
             dataset = dataset.select(range(min(len(dataset), self.config.train_examples_limit)))
-        return torch, accelerator, tokenizer, model, dataset, HfApi
+        return torch, tokenizer, model, dataset, HfApi
 
     def _prepare_hf_auth(self) -> tuple[str, str]:
         self._emit("auth")
@@ -102,6 +220,9 @@ class Trainer:
     @staticmethod
     def _device_of(model):
         return next(model.parameters()).device
+
+    def _trainable_parameters(self, model):
+        return [param for param in model.parameters() if param.requires_grad]
 
     def _prepare_batch(self, torch, tokenizer, examples):
         prompts = [build_prompt(example["question"]) for example in examples]
@@ -279,10 +400,10 @@ class Trainer:
     def train(self) -> dict[str, object]:
         self.hf_username, self.hf_token = self._prepare_hf_auth()
         if self.config.push_to_hub and not self.config.hub_repo:
-            self.config.hub_repo = f"{self.hf_username}/{self.config.model_id.split('/')[-1]}-{self.config.algo}"
-        torch, accelerator, tokenizer, model, dataset, _ = self._load_components()
+            self.config.hub_repo = self.config.default_hub_repo(self.hf_username)
+        torch, tokenizer, model, dataset, _ = self._load_components()
         optimizer = torch.optim.AdamW(
-            model.parameters(),
+            self._trainable_parameters(model),
             lr=self.config.learning_rate,
             weight_decay=self.config.weight_decay,
         )
@@ -296,7 +417,6 @@ class Trainer:
             model.load_state_dict(checkpoint["model"])
             optimizer.load_state_dict(checkpoint["optimizer"])
             self.global_step = int(checkpoint.get("global_step", 0))
-        model, optimizer = accelerator.prepare(model, optimizer)
 
         self.config.run_dir.mkdir(parents=True, exist_ok=True)
         self.tb.add_hparams_blob(asdict(self.config))
@@ -321,7 +441,7 @@ class Trainer:
                 stats = self._current_policy_stats(torch, model, rollout)
                 bundle = self._loss_for_algo(torch, rollout, stats)
                 optimizer.zero_grad()
-                accelerator.backward(bundle.loss)
+                bundle.loss.backward()
                 optimizer.step()
 
                 adv = compute_group_advantages(
@@ -364,16 +484,15 @@ class Trainer:
 
     def compare_divergence(self) -> dict[str, float]:
         self.hf_username, self.hf_token = self._prepare_hf_auth()
-        torch, accelerator, tokenizer, model, dataset, _ = self._load_components()
-        optimizer = torch.optim.AdamW(model.parameters(), lr=self.config.learning_rate)
-        model, optimizer = accelerator.prepare(model, optimizer)
+        torch, tokenizer, model, dataset, _ = self._load_components()
+        optimizer = torch.optim.AdamW(self._trainable_parameters(model), lr=self.config.learning_rate)
         example = dataset[0]
         _, answers, model_inputs = self._prepare_batch(torch, tokenizer, [example])
         rollout = self._generate_rollouts(torch, model, tokenizer, model_inputs, answers)
         before = self._current_policy_stats(torch, model, rollout)
         bundle = self._loss_for_algo(torch, rollout, before)
         optimizer.zero_grad()
-        accelerator.backward(bundle.loss)
+        bundle.loss.backward()
         optimizer.step()
         stats = self._current_policy_stats(torch, model, rollout)
 
