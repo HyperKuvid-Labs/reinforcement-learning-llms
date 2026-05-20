@@ -1,8 +1,8 @@
 # Training Commands
 
-This file is just the copy-paste version of the commands.
+This is the clean copy-paste sheet for the runs that actually make sense here.
 
-Use the repo venv:
+## Setup
 
 ```bash
 bash install.sh
@@ -10,420 +10,229 @@ source .venv/bin/activate
 tensorboard --logdir runs
 ```
 
-## Stable Defaults
+## Recommended Models
 
-If you want stable runs with the current code:
-- HRM -> `--finetune-method lora`
-- LFM -> `--finetune-method qlora`
+Primary model:
+- `nvidia/AceReason-Nemotron-1.1-7B`
 
-That is the safest default split right now.
+Secondary model:
+- `Skywork/Skywork-OR1-Math-7B`
 
-## HRM
+Optional third model:
+- `nvidia/AceMath-RL-Nemotron-7B`
 
-For `sapientinc/HRM-Text-1B`, use `lora` for now.
+These are the recommended models for this repo now. The older HRM/LFM path is not the default recommendation anymore.
 
-### HRM smoke test with TUI
+## Stable Finetune Defaults
+
+If you want the highest chance of a clean run:
+- `AceReason-Nemotron-1.1-7B` -> `--finetune-method qlora`
+- `Skywork-OR1-Math-7B` -> `--finetune-method qlora`
+- `AceMath-RL-Nemotron-7B` -> `--finetune-method qlora`
+
+If you are on a strong `48 GB` GPU and want to push harder, you can try `--finetune-method full`, but `qlora` is still the safer baseline.
+
+## Smoke Test
+
+Use this first before any real run:
 
 ```bash
 .venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
-  --finetune-method lora \
-  --cpu-offload \
-  --smoke-test \
-  --tui
-```
-
-### HRM smoke test without TUI
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo dppo \
-  --finetune-method lora \
-  --cpu-offload \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
   --smoke-test
 ```
 
-### HRM GRPO
+TUI version:
 
 ```bash
 .venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo grpo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96
-```
-
-### HRM GRPO with TUI
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo grpo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
-  --tui
-```
-
-### HRM PPO
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo ppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
-  --ppo-epochs 1
-```
-
-### HRM PPO with TUI
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo ppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
-  --ppo-epochs 1 \
-  --tui
-```
-
-### HRM DPPO top-k
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 8
-```
-
-### HRM DPPO top-k with TUI
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 8 \
-  --tui
-```
-
-### HRM DPPO binary
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
-  --ppo-epochs 1 \
-  --dppo-approx binary
-```
-
-### HRM tiny survival test
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo dppo \
-  --finetune-method lora \
-  --cpu-offload \
-  --rollout-group-size 1 \
-  --max-new-tokens 16 \
-  --train-examples-limit 1 \
-  --ppo-epochs 1 \
-  --topk 4 \
-  --save-every 1
-```
-
-## LFM
-
-For `LiquidAI/LFM2.5-1.2B-Thinking`, start with `qlora`.
-
-### LFM smoke test with TUI
-
-```bash
-.venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
-  --algo dppo \
   --finetune-method qlora \
-  --cpu-offload \
   --smoke-test \
   --tui
 ```
 
-### LFM GRPO
+## Main Runs: AceReason-Nemotron-1.1-7B
+
+### GRPO
 
 ```bash
 .venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo grpo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128
 ```
 
-### LFM PPO
+### PPO
 
 ```bash
 .venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo ppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
   --ppo-epochs 1
 ```
 
-### LFM DPPO top-k
+### DPPO top-k
 
 ```bash
 .venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
   --ppo-epochs 1 \
   --dppo-approx topk \
-  --topk 8
+  --topk 16
 ```
 
-### LFM DPPO top-k with TUI
+### DPPO binary
 
 ```bash
 .venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 8 \
-  --tui
-```
-
-### LFM DPPO binary
-
-```bash
-.venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --cpu-offload \
-  --rollout-group-size 2 \
-  --max-new-tokens 96 \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
   --ppo-epochs 1 \
   --dppo-approx binary
 ```
 
-## HF Push Variants
-
-### HRM DPPO top-k with HF push
+### DPPO top-k with TUI
 
 ```bash
 .venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --dppo-approx topk \
-  --topk 8 \
-  --save-every 20 \
-  --push-to-hub \
-  --delete-local-checkpoints
-```
-
-### HRM PPO with explicit HF repo name
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo ppo \
-  --dataset-split train \
-  --finetune-method lora \
-  --cpu-offload \
-  --push-to-hub \
-  --hub-repo Pradheep1647/aime-2025-hrm-text-1b-ppo-rk2-lora-clip0p2
-```
-
-### LFM DPPO top-k with HF push
-
-```bash
-.venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
-  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
-  --cpu-offload \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
   --dppo-approx topk \
-  --topk 8 \
-  --save-every 20 \
-  --push-to-hub \
-  --delete-local-checkpoints
+  --topk 16 \
+  --tui
+```
+
+## Main Runs: Skywork-OR1-Math-7B
+
+### GRPO
+
+```bash
+.venv/bin/python train.py \
+  --model Skywork/Skywork-OR1-Math-7B \
+  --algo grpo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128
+```
+
+### PPO
+
+```bash
+.venv/bin/python train.py \
+  --model Skywork/Skywork-OR1-Math-7B \
+  --algo ppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1
+```
+
+### DPPO top-k
+
+```bash
+.venv/bin/python train.py \
+  --model Skywork/Skywork-OR1-Math-7B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16
+```
+
+### DPPO binary
+
+```bash
+.venv/bin/python train.py \
+  --model Skywork/Skywork-OR1-Math-7B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx binary
+```
+
+## Optional Third Model: AceMath-RL-Nemotron-7B
+
+### DPPO top-k
+
+```bash
+.venv/bin/python train.py \
+  --model nvidia/AceMath-RL-Nemotron-7B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16
 ```
 
 ## 48 GB GPU Variants
 
-If you are on a proper `48 GB` GPU machine, you can be a bit more aggressive than the laptop-safe defaults.
+These are the commands I would use on an `L40S`-class `48 GB` GPU if I want a stronger run than the laptop-safe defaults.
 
-These are the commands I would use first.
-
-At this model size, `full` finetuning is also a reasonable thing to try on `48 GB` VRAM. I would still start with:
-- HRM -> `lora`
-- LFM -> `qlora`
-
-But if you specifically want the full-finetune runs, use the commands below.
-
-### HRM DPPO top-k on 48 GB
+### AceReason DPPO top-k, QLoRA
 
 ```bash
 .venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-### HRM PPO on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo ppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1
-```
-
-### HRM GRPO on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo grpo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method lora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128
-```
-
-### HRM DPPO top-k full finetune on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method full \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1 \
-  --dppo-approx topk \
-  --topk 16
-```
-
-### HRM PPO full finetune on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo ppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method full \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1
-```
-
-### HRM GRPO full finetune on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo grpo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method full \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128
-```
-
-### LFM DPPO top-k on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
@@ -436,40 +245,11 @@ But if you specifically want the full-finetune runs, use the commands below.
   --topk 16
 ```
 
-### LFM PPO on 48 GB
+### AceReason DPPO top-k, full finetune
 
 ```bash
 .venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
-  --algo ppo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128 \
-  --ppo-epochs 1
-```
-
-### LFM GRPO on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
-  --algo grpo \
-  --dataset test-time-compute/aime_2025 \
-  --dataset-split train \
-  --finetune-method qlora \
-  --rollout-group-size 4 \
-  --max-prompt-tokens 1024 \
-  --max-new-tokens 128
-```
-
-### LFM DPPO top-k full finetune on 48 GB
-
-```bash
-.venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
@@ -482,59 +262,89 @@ But if you specifically want the full-finetune runs, use the commands below.
   --topk 16
 ```
 
-### LFM PPO full finetune on 48 GB
+### Skywork DPPO top-k, full finetune
 
 ```bash
 .venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
-  --algo ppo \
+  --model Skywork/Skywork-OR1-Math-7B \
+  --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method full \
   --rollout-group-size 4 \
   --max-prompt-tokens 1024 \
   --max-new-tokens 128 \
-  --ppo-epochs 1
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16
 ```
 
-### LFM GRPO full finetune on 48 GB
+If full finetune starts getting unstable, go straight back to `qlora`.
+
+## Hugging Face Push
+
+### DPPO top-k with push
 
 ```bash
 .venv/bin/python train.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
-  --algo grpo \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
+  --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
-  --finetune-method full \
+  --finetune-method qlora \
   --rollout-group-size 4 \
   --max-prompt-tokens 1024 \
-  --max-new-tokens 128
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16 \
+  --save-every 20 \
+  --push-to-hub \
+  --delete-local-checkpoints
 ```
 
-## Eval / Divergence
+### Explicit repo name
 
-### HRM divergence comparison
+```bash
+.venv/bin/python train.py \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16 \
+  --push-to-hub \
+  --hub-repo yourname/aime-2025-acereason-nemotron-1-1-7b-dppo-rk4-qlora-topk16
+```
+
+## Divergence Eval
+
+### AceReason
 
 ```bash
 .venv/bin/python compare_divergence.py \
-  --model sapientinc/HRM-Text-1B \
+  --model nvidia/AceReason-Nemotron-1.1-7B \
   --approx all \
-  --topk 8
+  --topk 16
 ```
 
-### LFM divergence comparison
+### Skywork
 
 ```bash
 .venv/bin/python compare_divergence.py \
-  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --model Skywork/Skywork-OR1-Math-7B \
   --approx all \
-  --topk 8
+  --topk 16
 ```
 
-## Old queued TUI mode
+## Notes
 
-This is the separate queue-style TUI, not the exact single-run `train.py --tui` path:
-
-```bash
-.venv/bin/python tui.py
-```
+- `train.py --tui` runs the exact chosen config inside the TUI.
+- `train.py` without `--tui` is the better path for debugging crashes.
+- The CLI will ask for `HF_USERNAME` and `HF_TOKEN` if they are missing, then save them into `.env`.
+- TensorBoard is the real source of truth. The TUI is just the live operator surface.
