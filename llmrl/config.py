@@ -8,6 +8,7 @@ import re
 
 DEFAULT_DATASET = "test-time-compute/aime_2025"
 DEFAULT_MODELS = (
+    "Qwen/Qwen3.5-4B-Base",
     "nvidia/AceReason-Nemotron-1.1-7B",
     "Skywork/Skywork-OR1-Math-7B",
     "nvidia/AceMath-RL-Nemotron-7B",

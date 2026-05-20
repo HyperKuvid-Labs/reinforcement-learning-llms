@@ -13,6 +13,7 @@ The setup is simple from first principles:
 So the point here is not “best possible full RLHF stack”. The point is to hold the reward side fixed and compare the optimization behavior cleanly.
 
 This repo uses:
+- `Qwen/Qwen3.5-4B-Base`
 - `nvidia/AceReason-Nemotron-1.1-7B`
 - `Skywork/Skywork-OR1-Math-7B`
 - `nvidia/AceMath-RL-Nemotron-7B`
@@ -50,16 +51,18 @@ So all three methods are seeing the same reward function. That is the whole poin
 
 This pair is intentional.
 
-`AceReason-Nemotron-1.1-7B` is the primary model here because it is a strong 7B reasoning model. `Skywork-OR1-Math-7B` is the second comparison point, and `AceMath-RL-Nemotron-7B` is the optional third check. So I’m comparing algorithms, but I’m also comparing how the same RL-style update rules behave across different reasoning-model families on the same AIME setup.
+`Qwen/Qwen3.5-4B-Base` is the primary baseline here because it is the 4B model I want to train first. `AceReason-Nemotron-1.1-7B` is the stronger 7B comparison point, `Skywork-OR1-Math-7B` is the second 7B comparison point, and `AceMath-RL-Nemotron-7B` is the optional third check. So I’m comparing algorithms, but I’m also comparing how the same RL-style update rules behave across different reasoning-model families on the same AIME setup.
 
-> The model set is intentional: AceReason-Nemotron-1.1-7B is the primary reasoning model, Skywork-OR1-Math-7B is the second comparison point, and AceMath-RL-Nemotron-7B is the optional third check, so the repo compares both algorithm behavior and cross-model training behavior on the same AIME setup.
+> The model set is intentional: Qwen/Qwen3.5-4B-Base is the primary baseline, AceReason-Nemotron-1.1-7B is the stronger 7B comparison point, Skywork-OR1-Math-7B is the second 7B comparison point, and AceMath-RL-Nemotron-7B is the optional third check, so the repo compares both algorithm behavior and cross-model training behavior on the same AIME setup.
 
 Notes from upstream model cards:
+- `Qwen/Qwen3.5-4B-Base` is the main 4B baseline and should work with the normal Transformers-style text generation flow.
 - `nvidia/AceReason-Nemotron-1.1-7B` is a 7B reasoning model that should work with the normal Transformers-style text generation flow.
 - `Skywork/Skywork-OR1-Math-7B` is another math reasoning model in the same size band.
 - `nvidia/AceMath-RL-Nemotron-7B` is the optional third comparison model.
 
 Sources:
+- https://huggingface.co/Qwen/Qwen3.5-4B-Base
 - https://huggingface.co/nvidia/AceReason-Nemotron-1.1-7B
 - https://huggingface.co/Skywork/Skywork-OR1-Math-7B
 - https://huggingface.co/nvidia/AceMath-RL-Nemotron-7B
@@ -128,7 +131,7 @@ Single run example:
 
 ```bash
 python train.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
+  --model Qwen/Qwen3.5-4B-Base \
   --algo dppo \
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
@@ -153,7 +156,7 @@ If you just want to see whether the pipeline survives end to end, use the smoke 
 
 ```bash
 python train.py \
-  --model nvidia/AceReason-Nemotron-1.1-7B \
+  --model Qwen/Qwen3.5-4B-Base \
   --algo dppo \
   --smoke-test
 ```
@@ -178,9 +181,9 @@ So by default the naming includes the dataset, model, algorithm, rollout-group `
 Other examples:
 
 ```bash
-python train.py --model Skywork/Skywork-OR1-Math-7B --algo grpo
-python train.py --model Skywork/Skywork-OR1-Math-7B --algo ppo
-python compare_divergence.py --model nvidia/AceReason-Nemotron-1.1-7B --approx all
+python train.py --model Qwen/Qwen3.5-4B-Base --algo grpo
+python train.py --model Qwen/Qwen3.5-4B-Base --algo ppo
+python compare_divergence.py --model Qwen/Qwen3.5-4B-Base --approx all
 python tui.py
 ```
 
