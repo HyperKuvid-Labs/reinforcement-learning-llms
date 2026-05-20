@@ -1,109 +1,86 @@
 # AIME 2025 RL Comparison for 1B LLMs
 
-This repo compares **GRPO**, **PPO**, and **DPPO** on **AIME 2025** with:
+This repo is basically me trying to compare **GRPO**, **PPO**, and **DPPO** on the same math setup, without hiding the core assumption.
 
+The setup is simple from first principles:
+- take a reasoning model
+- ask it an AIME 2025 question
+- sample rollouts
+- check whether the final answer is actually correct
+- give reward `1` if correct, else `0`
+- then compare how different policy update rules behave under that same signal
+
+So the point here is not “best possible full RLHF stack”. The point is to hold the reward side fixed and compare the optimization behavior cleanly.
+
+This repo uses:
 - `sapientinc/HRM-Text-1B`
 - `LiquidAI/LFM2.5-1.2B-Thinking`
 
-The training objective is binary-answer reward on math completions: a rollout gets reward `1` only when the extracted final answer matches the gold AIME answer after normalization.
+The dataset is:
+- `test-time-compute/aime_2025`
 
-## Scope
+> This repo compares GRPO, PPO-style clipping, and DPPO-style divergence gating under the same deterministic verifier reward, without a learned reward model or value critic, so the comparison is intentionally about policy update behavior rather than full actor-critic RLHF PPO.
+
+## What Is Actually Being Compared
 
 Main comparison:
 - `GRPO`
 - `PPO`
 - `DPPO` with `top-k` divergence approximation by default
 
-Additional divergence analysis:
+Extra divergence study:
 - `naive` exact divergence, eval-only
 - `binary` approximation
 - `top-k` approximation
 
-Everything is logged to **TensorBoard**. The TUI is only an operator surface; TensorBoard is the system of record for metrics, config, checkpoint events, upload events, and divergence analysis.
+Reward is binary-answer reward on completions:
+- extract the final answer
+- normalize it
+- compare against the gold AIME answer
+- reward = `1` if it matches, else `0`
 
-## Models and Dataset
+So all three methods are seeing the same reward function. That is the whole point of this repo.
 
-- Dataset: `test-time-compute/aime_2025`
-- Model 1: `sapientinc/HRM-Text-1B`
-- Model 2: `LiquidAI/LFM2.5-1.2B-Thinking`
+## Why These Two Models
 
-Notes from the upstream model cards:
-- `sapientinc/HRM-Text-1B` requires `trust_remote_code=True`, and the model card says some setups may need a recent `transformers` build with `hrm_text` support.
-- `LiquidAI/LFM2.5-1.2B-Thinking` is a reasoning model intended for Transformers/vLLM-style text generation.
+- `sapientinc/HRM-Text-1B`
+- `LiquidAI/LFM2.5-1.2B-Thinking`
+
+This pair is intentional.
+
+`HRM-Text-1B` is interesting because it is a newer **hierarchical reasoning model** style architecture. `LFM2.5-1.2B-Thinking` gives a very different reasoning-model family to contrast against it. So I’m not just comparing algorithms here, I also want to see how the same RL-style update rules behave across two different reasoning architectures on the same AIME setup.
+
+> The model pair is intentional: HRM-Text-1B represents a newer hierarchical reasoning architecture, while LFM2.5-1.2B-Thinking provides a contrasting reasoning model family, so the repo compares both algorithm behavior and cross-architecture training behavior on the same AIME setup.
+
+Notes from upstream model cards:
+- `sapientinc/HRM-Text-1B` needs `trust_remote_code=True`, and may need a recent `transformers` build with `hrm_text` support.
+- `LiquidAI/LFM2.5-1.2B-Thinking` is a reasoning model meant to work with normal Transformers-style text generation flows.
 
 Sources:
 - https://huggingface.co/sapientinc/HRM-Text-1B
 - https://huggingface.co/LiquidAI/LFM2.5-1.2B-Thinking
 - https://huggingface.co/datasets/test-time-compute/aime_2025
 
-## Setup
+## Logging
 
-The local environment in this repo previously had a broken CUDA-linked PyTorch import, so bootstrap from scratch:
+Everything that matters should go to **TensorBoard**.
 
-```bash
-bash install.sh
-```
+The TUI is just the live operator surface. TensorBoard is the actual source of truth for:
+- training metrics
+- eval metrics
+- divergence stats
+- checkpoint events
+- upload events
+- run config
+- system stats
 
-If `torch` still fails to import with missing CUDA shared libraries, reinstall PyTorch for your exact CUDA version before running training.
-
-Before the first training or divergence run, the CLI now prompts for:
-- `HF_USERNAME`
-- `HF_TOKEN`
-
-They are saved in a repo-local `.env` file and reused automatically on later runs.
-
-## Training
-
-Run a single training job:
-
-```bash
-python train.py \
-  --model sapientinc/HRM-Text-1B \
-  --algo dppo \
-  --dataset test-time-compute/aime_2025 \
-  --dppo-approx topk \
-  --topk 16 \
-  --save-every 20 \
-  --push-to-hub \
-  --hub-repo your-user/your-repo \
-  --delete-local-checkpoints \
-  --cpu-offload
-```
-
-If `--push-to-hub` is set and `--hub-repo` is omitted, the trainer defaults to:
-
-```text
-<HF_USERNAME>/<model-slug>-<algo>
-```
-
-Run GRPO or PPO:
-
-```bash
-python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo grpo
-python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo ppo
-```
-
-Run divergence comparison:
-
-```bash
-python compare_divergence.py --model sapientinc/HRM-Text-1B --approx all
-```
-
-Launch the operator TUI:
-
-```bash
-python tui.py
-```
-
-## TensorBoard
-
-Every run writes TensorBoard events under `runs/`.
+Run it with:
 
 ```bash
 tensorboard --logdir runs
 ```
 
-Representative scalar tags:
+Representative tags:
 - `train/loss`
 - `train/reward_mean`
 - `train/reward_std`
@@ -125,22 +102,76 @@ Representative scalar tags:
 - `system/checkpoint_upload_time`
 - `system/checkpoint_prune_status`
 
-## Approximation Details
+## Setup
 
-Binary approximation:
-- collapse the distribution into sampled-token probability vs the rest
+Bootstrap from scratch:
 
-Top-k approximation:
-- keep `TopK(mu)` plus the sampled token and aggregate the rest into `other`
+```bash
+bash install.sh
+```
 
-Naive approximation:
-- compute divergence on the full vocabulary
-- enabled only for eval/analysis because it is much more expensive
+The local environment here previously had a broken CUDA-linked PyTorch install, so if `torch` still fails to import because of missing CUDA shared libraries, reinstall PyTorch for your exact CUDA version.
 
-## Files
+Before training or divergence eval starts, the CLI asks for:
+- `HF_USERNAME`
+- `HF_TOKEN`
 
-- `train.py`: main CLI for GRPO/PPO/DPPO training
+These get saved into a repo-local `.env` and reused later.
+
+## Training
+
+Single run example:
+
+```bash
+python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dppo-approx topk \
+  --topk 16 \
+  --save-every 20 \
+  --push-to-hub \
+  --hub-repo your-user/your-repo \
+  --delete-local-checkpoints \
+  --cpu-offload
+```
+
+If `--push-to-hub` is set and `--hub-repo` is omitted, the trainer falls back to:
+
+```text
+<HF_USERNAME>/<model-slug>-<algo>
+```
+
+Other examples:
+
+```bash
+python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo grpo
+python train.py --model LiquidAI/LFM2.5-1.2B-Thinking --algo ppo
+python compare_divergence.py --model sapientinc/HRM-Text-1B --approx all
+python tui.py
+```
+
+## Divergence Approximation
+
+Why the approximation story exists at all:
+
+For DPPO, checking full distribution shift directly is expensive for LLMs, so this repo keeps three views of it:
+
+- `binary`
+  sampled-token probability vs everything else
+
+- `top-k`
+  keep `TopK(mu)` plus the sampled token, and collapse the rest into `other`
+
+- `naive`
+  full-vocab divergence
+
+`naive` is eval-only here because that is the expensive reference version.
+
+## Repo Layout
+
+- `train.py`: main training CLI
 - `compare_divergence.py`: eval-only divergence comparison
-- `tui.py`: grey/white production-style training console
-- `graphs.py`: plot TensorBoard scalar traces
-- `llmrl/`: training, divergence, dataset, and logging modules
+- `tui.py`: grey/white operator console
+- `graphs.py`: plot TensorBoard traces
+- `llmrl/`: training, auth, divergence, reward, and logging code
