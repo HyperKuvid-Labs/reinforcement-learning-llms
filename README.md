@@ -20,6 +20,7 @@ Default dataset:
 Default models:
 - `LiquidAI/LFM2.5-1.2B-Thinking`
 - `sapientinc/HRM-Text-1B`
+- `Qwen/Qwen2.5-Math-1.5B-Instruct`
 - `Qwen/Qwen3.5-4B-Base`
 
 > This repo compares GRPO, PPO-style clipping, and DPPO-style divergence gating under the same deterministic verifier reward, without a learned reward model or value critic, so the comparison is intentionally about policy update behavior rather than full actor-critic RLHF PPO.
@@ -50,7 +51,7 @@ The small-model comparison is intentional.
 
 `LiquidAI/LFM2.5-1.2B-Thinking` is the diffusion-style small reasoning model. `sapientinc/HRM-Text-1B` is the hierarchical reasoning model. I want to see whether the same RL update behaves differently across these two model families before scaling the experiment back up.
 
-`Qwen/Qwen3.5-4B-Base` stays as the optional stronger baseline, but it is no longer the laptop-first default path.
+`Qwen/Qwen2.5-Math-1.5B-Instruct` is the small math-specialized fallback when HRM and LFM are not giving useful signal. `Qwen/Qwen3.5-4B-Base` stays as the optional stronger baseline, but it is no longer the laptop-first default path.
 
 > HRM and LFM are not just two random 1B models here: HRM is a hierarchical reasoning model and LFM is a diffusion-based model, so the comparison is also about how different model families respond to the same verifier RL loop.
 
@@ -60,11 +61,12 @@ The small-model comparison is intentional.
 
 In auto mode:
 - HRM and LFM use the regular Transformers/PEFT path
-- Qwen uses Unsloth, because that is the path that makes more sense for the optional 4B run
+- both Qwen models use Unsloth, because that is the path that makes more sense for the Qwen runs
 
 Stable finetune choices:
 - LFM: `--finetune-method qlora`
 - HRM: `--finetune-method lora`
+- Qwen2.5-Math 1.5B: `--finetune-method qlora`
 - Qwen 4B: `--finetune-method qlora`
 
 ## Logging
@@ -178,6 +180,26 @@ HRM version:
   --max-new-tokens 64 \
   --train-examples-limit 200 \
   --tui
+```
+
+Qwen2.5-Math 1.5B fallback:
+
+```bash
+.venv/bin/python train.py \
+  --model Qwen/Qwen2.5-Math-1.5B-Instruct \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 8 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
 ```
 
 If `--hub-repo` is omitted, the trainer falls back to:

@@ -17,6 +17,7 @@ tensorboard --logdir runs
 Primary laptop models:
 - `LiquidAI/LFM2.5-1.2B-Thinking`
 - `sapientinc/HRM-Text-1B`
+- `Qwen/Qwen2.5-Math-1.5B-Instruct`
 
 Optional stronger baseline:
 - `Qwen/Qwen3.5-4B-Base`
@@ -24,12 +25,13 @@ Optional stronger baseline:
 Stable finetune choices:
 - LFM -> `--finetune-method qlora`
 - HRM -> `--finetune-method lora`
+- Qwen2.5-Math 1.5B -> `--finetune-method qlora`
 - Qwen 4B -> `--finetune-method qlora`
 
 Backend default:
 - `--trainer-backend auto`
 - auto uses Transformers for HRM/LFM
-- auto uses Unsloth for Qwen
+- auto uses Unsloth for both Qwen models
 
 Important: do not use `--rollout-group-size 1` for real training. The group advantage becomes zero. Use `1` only for smoke tests.
 
@@ -154,6 +156,82 @@ HRM smoke test:
   --rollout-group-size 2 \
   --max-prompt-tokens 512 \
   --max-new-tokens 64 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+## Qwen2.5-Math-1.5B-Instruct
+
+### GRPO
+
+```bash
+.venv/bin/python train.py \
+  --model Qwen/Qwen2.5-Math-1.5B-Instruct \
+  --algo grpo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+### PPO
+
+```bash
+.venv/bin/python train.py \
+  --model Qwen/Qwen2.5-Math-1.5B-Instruct \
+  --algo ppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+### DPPO top-k
+
+```bash
+.venv/bin/python train.py \
+  --model Qwen/Qwen2.5-Math-1.5B-Instruct \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 8 \
+  --micro-batch-size 1 \
+  --train-examples-limit 200
+```
+
+### DPPO binary
+
+```bash
+.venv/bin/python train.py \
+  --model Qwen/Qwen2.5-Math-1.5B-Instruct \
+  --algo dppo \
+  --dataset openai/gsm8k \
+  --dataset-config main \
+  --dataset-split train \
+  --finetune-method qlora \
+  --rollout-group-size 2 \
+  --max-prompt-tokens 512 \
+  --max-new-tokens 64 \
+  --ppo-epochs 1 \
+  --dppo-approx binary \
   --micro-batch-size 1 \
   --train-examples-limit 200
 ```

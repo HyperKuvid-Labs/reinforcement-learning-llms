@@ -11,6 +11,7 @@ DEFAULT_DATASET_CONFIG = "main"
 DEFAULT_MODELS = (
     "LiquidAI/LFM2.5-1.2B-Thinking",
     "sapientinc/HRM-Text-1B",
+    "Qwen/Qwen2.5-Math-1.5B-Instruct",
     "Qwen/Qwen3.5-4B-Base",
 )
 DEFAULT_ALGOS = ("grpo", "ppo", "dppo")
