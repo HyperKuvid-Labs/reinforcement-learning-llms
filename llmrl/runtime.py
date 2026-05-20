@@ -315,6 +315,7 @@ class Trainer:
                     rollout["old_topk_indices"][:, step, :],
                     rollout["old_topk_probs"][:, step, :],
                     target_tokens[:, step],
+                    rollout["old_chosen_probs"][:, step],
                 )
             )
             reduced_current.append(
@@ -429,7 +430,7 @@ class Trainer:
             self._emit("sampling", prompt=example["question"][:120])
             rollout = self._generate_rollouts(torch, model, tokenizer, model_inputs, answers)
             reward_mean = float(rollout["rewards"].mean().item())
-            reward_std = float(rollout["rewards"].std().item())
+            reward_std = float(rollout["rewards"].std(unbiased=False).item())
 
             step_metrics: dict[str, float] = {
                 "train/reward_mean": reward_mean,
@@ -451,7 +452,7 @@ class Trainer:
                     {
                         "train/loss": float(bundle.loss.item()),
                         "train/advantage_mean": float(adv.mean().item()),
-                        "train/advantage_std": float(adv.std().item()),
+                        "train/advantage_std": float(adv.std(unbiased=False).item()),
                         "eval/accuracy": reward_mean,
                         "eval/completion_length": float(rollout["completions"].shape[1]),
                         "system/step_time": perf_counter() - rollout_start,

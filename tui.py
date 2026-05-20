@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 import threading
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
+import traceback
 
 from rich import box
 from rich.align import Align
@@ -14,6 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
+from llmrl.auth import ensure_hf_credentials
 from llmrl.config import DEFAULT_ALGOS, DEFAULT_MODELS, RunConfig
 from llmrl.runtime import Trainer
 
@@ -33,11 +35,45 @@ class DashboardState:
         self.queue_runs = queue_runs
         self.current: dict[str, object] = {}
         self.history: list[dict[str, object]] = []
+        self.logs: list[str] = []
 
     def update(self, payload: dict[str, object]) -> None:
         self.current = payload
+        self._append_payload_log(payload)
         if payload.get("phase") == "done":
             self.history.append(payload)
+
+    def add_log(self, message: str) -> None:
+        self.logs.append(message)
+        if len(self.logs) > 14:
+            self.logs = self.logs[-14:]
+
+    def _append_payload_log(self, payload: dict[str, object]) -> None:
+        phase = str(payload.get("phase", "unknown"))
+        step = payload.get("global_step", 0)
+        line = f"[step {step}] {phase}"
+        if phase == "running":
+            reward = float(payload.get("train/reward_mean", 0.0))
+            loss = float(payload.get("train/loss", 0.0))
+            line = f"[step {step}] running | reward={reward:.4f} loss={loss:.4f}"
+        elif phase == "error":
+            error = str(payload.get("error", "unknown error"))
+            line = f"[step {step}] error | {error}"
+        elif phase == "auth":
+            line = "[step 0] auth | checking HF credentials"
+        elif phase == "adapter_fallback":
+            line = (
+                f"[step {step}] adapter fallback | "
+                f"{payload.get('requested_method')} -> {payload.get('fallback_method')}"
+            )
+        elif phase == "uploading":
+            line = f"[step {step}] uploading | {payload.get('checkpoint_dir', '')}"
+        elif phase == "done":
+            line = f"[step {step}] done"
+        self.add_log(line)
+        if "traceback" in payload:
+            for entry in str(payload["traceback"]).strip().splitlines()[-8:]:
+                self.add_log(entry)
 
 
 def make_header(current: dict[str, object]) -> Panel:
@@ -108,54 +144,102 @@ def make_footer(state: DashboardState) -> Panel:
     return Panel(Align.left(body), title="Recent Runs", box=box.SQUARE, border_style="grey50")
 
 
+def make_logs(state: DashboardState) -> Panel:
+    body = "\n".join(state.logs[-12:]) if state.logs else "No logs yet."
+    return Panel(Align.left(body), title="Logs", box=box.SQUARE, border_style="grey50")
+
+
 def build_layout(state: DashboardState) -> Layout:
     layout = Layout()
     layout.split_column(
         Layout(name="header", size=3),
         Layout(name="main", ratio=1),
-        Layout(name="footer", size=8),
+        Layout(name="bottom", size=10),
     )
     layout["main"].split_row(
         Layout(name="queue", ratio=2),
         Layout(name="metrics", ratio=2),
         Layout(name="divergence", ratio=1),
     )
+    layout["bottom"].split_row(
+        Layout(name="logs", ratio=2),
+        Layout(name="footer", ratio=2),
+    )
     layout["header"].update(make_header(state.current))
     layout["queue"].update(make_queue(state))
     layout["metrics"].update(make_metrics(state.current))
     layout["divergence"].update(make_divergence(state.current))
+    layout["logs"].update(make_logs(state))
     layout["footer"].update(make_footer(state))
     return layout
 
 
 def run_training(queue_runs: list[RunConfig], state: DashboardState, events: Queue) -> None:
     for run in queue_runs:
-        trainer = Trainer(run, callback=events.put)
-        trainer.train()
+        try:
+            trainer = Trainer(run, callback=events.put)
+            trainer.train()
+        except Exception as exc:
+            events.put(
+                {
+                    "phase": "error",
+                    "global_step": 0,
+                    "run_name": run.slug,
+                    "model_id": run.model_id,
+                    "algo": run.algo,
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                }
+            )
+            break
 
 
 def run_single_training(run: RunConfig, state: DashboardState, events: Queue) -> None:
-    trainer = Trainer(run, callback=events.put)
-    trainer.train()
+    try:
+        trainer = Trainer(run, callback=events.put)
+        trainer.train()
+    except Exception as exc:
+        events.put(
+            {
+                "phase": "error",
+                "global_step": 0,
+                "run_name": run.slug,
+                "model_id": run.model_id,
+                "algo": run.algo,
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
+            }
+        )
 
 
 def run_config_with_tui(run: RunConfig) -> None:
+    ensure_hf_credentials(prompt=True)
     state = DashboardState([run])
     events: Queue = Queue()
     worker = threading.Thread(target=run_single_training, args=(run, state, events), daemon=True)
     worker.start()
 
-    with Live(build_layout(state), console=console, refresh_per_second=4, screen=True) as live:
+    with Live(build_layout(state), console=console, screen=True, auto_refresh=False) as live:
         while worker.is_alive() or not events.empty():
+            updated = False
+            try:
+                payload = events.get(timeout=0.5)
+                state.update(payload)
+                updated = True
+            except Empty:
+                pass
             while not events.empty():
                 state.update(events.get())
-            live.update(build_layout(state))
+                updated = True
+            if updated:
+                live.update(build_layout(state), refresh=True)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Grey/white TUI for queued training runs.")
     parser.add_argument("--status-dir", type=Path, default=Path(".runtime"))
     args = parser.parse_args()
+    ensure_hf_credentials(prompt=True)
 
     queue_runs = []
     for model_id in DEFAULT_MODELS:
@@ -175,11 +259,20 @@ def main() -> None:
     worker = threading.Thread(target=run_training, args=(queue_runs, state, events), daemon=True)
     worker.start()
 
-    with Live(build_layout(state), console=console, refresh_per_second=4, screen=True) as live:
+    with Live(build_layout(state), console=console, screen=True, auto_refresh=False) as live:
         while worker.is_alive() or not events.empty():
+            updated = False
+            try:
+                payload = events.get(timeout=0.5)
+                state.update(payload)
+                updated = True
+            except Empty:
+                pass
             while not events.empty():
                 state.update(events.get())
-            live.update(build_layout(state))
+                updated = True
+            if updated:
+                live.update(build_layout(state), refresh=True)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,7 @@ def compute_group_advantages(rewards, mode: str):
     rewards = rewards.float()
     mean = rewards.mean(dim=1, keepdim=True)
     if mode == "grpo":
-        std = rewards.std(dim=1, keepdim=True).clamp_min(1e-6)
+        std = rewards.std(dim=1, keepdim=True, unbiased=False).clamp_min(1e-6)
         return (rewards - mean) / std
     return rewards - mean
 

@@ -32,65 +32,24 @@ def topk_kl(mu_topk, pi_topk):
     return (mu_topk * (_safe_log(mu_topk) - _safe_log(pi_topk))).sum(dim=-1)
 
 
-def old_reduced_distribution(topk_indices, topk_probs, sampled_indices):
+def old_reduced_distribution(topk_indices, topk_probs, sampled_indices, sampled_probs):
     import torch
 
-    expanded_sampled = sampled_indices.unsqueeze(-1)
-    merged_indices = torch.cat([topk_indices, expanded_sampled], dim=-1)
-    merged_probs = torch.cat(
-        [topk_probs, topk_probs.new_zeros(topk_probs.shape[0], 1)],
-        dim=-1,
-    )
-    rows = []
-    for row_indices, row_probs, sampled in zip(merged_indices, merged_probs, sampled_indices):
-        seen = {}
-        for token_id, prob in zip(row_indices.tolist(), row_probs.tolist()):
-            seen[token_id] = max(seen.get(token_id, 0.0), prob)
-        if sampled.item() not in seen:
-            seen[sampled.item()] = 0.0
-        values = torch.tensor(list(seen.values()), device=topk_probs.device, dtype=topk_probs.dtype)
-        other_prob = (1.0 - values.sum()).clamp_min(0.0)
-        rows.append(torch.cat([values, other_prob.unsqueeze(0)], dim=0))
-    max_len = max(row.shape[0] for row in rows)
-    padded = []
-    for row in rows:
-        if row.shape[0] < max_len:
-            pad = row.new_zeros(max_len - row.shape[0])
-            padded.append(torch.cat([row, pad], dim=0))
-        else:
-            padded.append(row)
-    return torch.stack(padded, dim=0)
+    sampled_in_topk = (topk_indices == sampled_indices.unsqueeze(-1)).any(dim=-1, keepdim=True)
+    sampled_extra = torch.where(sampled_in_topk, sampled_probs.new_zeros(sampled_probs.shape[0], 1), sampled_probs.unsqueeze(-1))
+    other_prob = (1.0 - topk_probs.sum(dim=-1, keepdim=True) - sampled_extra).clamp_min(0.0)
+    return torch.cat([topk_probs, sampled_extra, other_prob], dim=-1)
 
 
 def current_reduced_distribution(topk_indices, sampled_indices, current_probs):
     import torch
 
-    expanded_sampled = sampled_indices.unsqueeze(-1)
-    merged = torch.cat([topk_indices, expanded_sampled], dim=-1)
-    rows = []
-    unique_probs = []
-    for row_indices, row_probs in zip(merged, current_probs):
-        seen = set()
-        row_unique = []
-        for token_id in row_indices.tolist():
-            if token_id not in seen:
-                row_unique.append(token_id)
-                seen.add(token_id)
-        index_tensor = torch.tensor(row_unique, device=current_probs.device, dtype=torch.long)
-        gathered = row_probs.gather(0, index_tensor)
-        other_prob = (1.0 - gathered.sum()).clamp_min(0.0)
-        row_with_other = torch.cat([gathered, other_prob.unsqueeze(0)], dim=0)
-        rows.append(index_tensor)
-        unique_probs.append(row_with_other)
-    max_len = max(prob.shape[0] for prob in unique_probs)
-    padded = []
-    for row in unique_probs:
-        if row.shape[0] < max_len:
-            pad = row.new_zeros(max_len - row.shape[0])
-            padded.append(torch.cat([row, pad], dim=0))
-        else:
-            padded.append(row)
-    return torch.stack(padded, dim=0)
+    topk_gathered = current_probs.gather(1, topk_indices)
+    sampled_probs = current_probs.gather(1, sampled_indices.unsqueeze(-1))
+    sampled_in_topk = (topk_indices == sampled_indices.unsqueeze(-1)).any(dim=-1, keepdim=True)
+    sampled_extra = torch.where(sampled_in_topk, sampled_probs.new_zeros(sampled_probs.shape), sampled_probs)
+    other_prob = (1.0 - topk_gathered.sum(dim=-1, keepdim=True) - sampled_extra).clamp_min(0.0)
+    return torch.cat([topk_gathered, sampled_extra, other_prob], dim=-1)
 
 
 def full_distribution_tv(mu_probs, pi_probs):
