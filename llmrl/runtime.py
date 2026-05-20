@@ -356,6 +356,10 @@ class Trainer:
     def _trainable_parameters(self, model):
         return [param for param in model.parameters() if param.requires_grad]
 
+    @staticmethod
+    def _text_tokenizer(tokenizer):
+        return getattr(tokenizer, "tokenizer", tokenizer)
+
     def _assert_finite_tensor(self, torch, tensor, label: str) -> None:
         if not torch.isfinite(tensor).all():
             raise RuntimeError(f"non-finite tensor detected in {label}")
@@ -368,14 +372,24 @@ class Trainer:
     def _prepare_batch(self, torch, tokenizer, examples):
         prompts = [build_prompt(example["question"]) for example in examples]
         answers = [str(example["answer"]) for example in examples]
-        model_inputs = tokenizer(
-            prompts,
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
-            max_length=self.config.max_prompt_tokens,
-        )
-        model_inputs["pad_token_id"] = tokenizer.pad_token_id
+        text_tokenizer = self._text_tokenizer(tokenizer)
+        if text_tokenizer is not tokenizer:
+            model_inputs = text_tokenizer(
+                prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.config.max_prompt_tokens,
+            )
+        else:
+            model_inputs = tokenizer(
+                text=prompts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
+                max_length=self.config.max_prompt_tokens,
+            )
+        model_inputs["pad_token_id"] = text_tokenizer.pad_token_id
         return prompts, answers, model_inputs
 
     def _generate_rollouts(self, torch, model, tokenizer, model_inputs, answers):
@@ -401,7 +415,7 @@ class Trainer:
         sequences = generation.sequences
         prompt_len = repeated["input_ids"].shape[1]
         completions = sequences[:, prompt_len:]
-        decoded = tokenizer.batch_decode(completions, skip_special_tokens=True)
+        decoded = self._text_tokenizer(tokenizer).batch_decode(completions, skip_special_tokens=True)
         expanded_answers = []
         for answer in answers:
             expanded_answers.extend([answer] * self.config.rollout_group_size)
