@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import traceback
 from dataclasses import asdict
 from pathlib import Path
 from time import perf_counter
@@ -175,6 +176,12 @@ class Trainer:
 
     def _load_components(self):
         self._normalize_finetune_method()
+        self._emit(
+            "load_start",
+            finetune_method=self.config.finetune_method,
+            cpu_offload=self.config.cpu_offload,
+            dataset_split=self.config.dataset_split,
+        )
         (
             torch,
             load_dataset,
@@ -190,11 +197,17 @@ class Trainer:
             self.config.model_id,
             trust_remote_code=True,
         )
+        self._emit("tokenizer_loaded")
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
         model = AutoModelForCausalLM.from_pretrained(
             self.config.model_id,
             **self._build_model_load_kwargs(torch, BitsAndBytesConfig),
+        )
+        self._emit(
+            "model_loaded",
+            cuda_available=bool(torch.cuda.is_available()),
+            model_device=str(self._device_of(model)),
         )
         if hasattr(model, "gradient_checkpointing_enable"):
             model.gradient_checkpointing_enable()
@@ -206,9 +219,16 @@ class Trainer:
         )
         if not self.config.cpu_offload and torch.cuda.is_available():
             model = model.to("cuda")
+        self._emit(
+            "adapter_ready",
+            finetune_method=self.config.finetune_method,
+            trainable_params=sum(p.numel() for p in model.parameters() if p.requires_grad),
+        )
+        self._emit("dataset_loading", dataset=self.config.dataset_id, split=self.config.dataset_split)
         dataset = load_dataset(self.config.dataset_id, split=self.config.dataset_split)
         if self.config.train_examples_limit:
             dataset = dataset.select(range(min(len(dataset), self.config.train_examples_limit)))
+        self._emit("dataset_loaded", examples=len(dataset))
         return torch, tokenizer, model, dataset, HfApi
 
     def _prepare_hf_auth(self) -> tuple[str, str]:
@@ -399,89 +419,101 @@ class Trainer:
         }
 
     def train(self) -> dict[str, object]:
-        self.hf_username, self.hf_token = self._prepare_hf_auth()
-        if self.config.push_to_hub and not self.config.hub_repo:
-            self.config.hub_repo = self.config.default_hub_repo(self.hf_username)
-        torch, tokenizer, model, dataset, _ = self._load_components()
-        optimizer = torch.optim.AdamW(
-            self._trainable_parameters(model),
-            lr=self.config.learning_rate,
-            weight_decay=self.config.weight_decay,
-        )
-        if self.config.resume == "auto" and self._trainer_state_path.exists():
-            checkpoint = torch.load(self._trainer_state_path, map_location="cpu")
-            model.load_state_dict(checkpoint["model"])
-            optimizer.load_state_dict(checkpoint["optimizer"])
-            self.global_step = int(checkpoint.get("global_step", 0))
-        elif self.config.resume not in {"off", "auto"}:
-            checkpoint = torch.load(self.config.resume, map_location="cpu")
-            model.load_state_dict(checkpoint["model"])
-            optimizer.load_state_dict(checkpoint["optimizer"])
-            self.global_step = int(checkpoint.get("global_step", 0))
+        try:
+            self.hf_username, self.hf_token = self._prepare_hf_auth()
+            if self.config.push_to_hub and not self.config.hub_repo:
+                self.config.hub_repo = self.config.default_hub_repo(self.hf_username)
+            torch, tokenizer, model, dataset, _ = self._load_components()
+            optimizer = torch.optim.AdamW(
+                self._trainable_parameters(model),
+                lr=self.config.learning_rate,
+                weight_decay=self.config.weight_decay,
+            )
+            self._emit("optimizer_ready", learning_rate=self.config.learning_rate)
+            if self.config.resume == "auto" and self._trainer_state_path.exists():
+                checkpoint = torch.load(self._trainer_state_path, map_location="cpu")
+                model.load_state_dict(checkpoint["model"])
+                optimizer.load_state_dict(checkpoint["optimizer"])
+                self.global_step = int(checkpoint.get("global_step", 0))
+                self._emit("resumed", resume_path=str(self._trainer_state_path), global_step=self.global_step)
+            elif self.config.resume not in {"off", "auto"}:
+                checkpoint = torch.load(self.config.resume, map_location="cpu")
+                model.load_state_dict(checkpoint["model"])
+                optimizer.load_state_dict(checkpoint["optimizer"])
+                self.global_step = int(checkpoint.get("global_step", 0))
+                self._emit("resumed", resume_path=str(self.config.resume), global_step=self.global_step)
 
-        self.config.run_dir.mkdir(parents=True, exist_ok=True)
-        self.tb.add_hparams_blob(asdict(self.config))
-        self._emit("ready", run_dir=str(self.config.run_dir))
+            self.config.run_dir.mkdir(parents=True, exist_ok=True)
+            self.tb.add_hparams_blob(asdict(self.config))
+            self._emit("ready", run_dir=str(self.config.run_dir))
 
-        for example in dataset:
-            self.global_step += 1
-            _, answers, model_inputs = self._prepare_batch(torch, tokenizer, [example])
-            rollout_start = perf_counter()
-            self._emit("sampling", prompt=example["question"][:120])
-            rollout = self._generate_rollouts(torch, model, tokenizer, model_inputs, answers)
-            reward_mean = float(rollout["rewards"].mean().item())
-            reward_std = float(rollout["rewards"].std(unbiased=False).item())
-
-            step_metrics: dict[str, float] = {
-                "train/reward_mean": reward_mean,
-                "train/reward_std": reward_std,
-                "eval/reward_mean": reward_mean,
-            }
-            for epoch_idx in range(self.config.ppo_epochs):
-                self._emit("backward", ppo_epoch=epoch_idx + 1)
-                stats = self._current_policy_stats(torch, model, rollout)
-                bundle = self._loss_for_algo(torch, rollout, stats)
-                optimizer.zero_grad()
-                bundle.loss.backward()
-                optimizer.step()
-
-                adv = compute_group_advantages(
-                    rollout["rewards"], "grpo" if self.config.algo == "grpo" else "ppo"
+            for example in dataset:
+                self.global_step += 1
+                _, answers, model_inputs = self._prepare_batch(torch, tokenizer, [example])
+                rollout_start = perf_counter()
+                self._emit("sampling", prompt=example["question"][:120], step_index=self.global_step)
+                rollout = self._generate_rollouts(torch, model, tokenizer, model_inputs, answers)
+                self._emit(
+                    "rollout_ready",
+                    completion_tokens=int(rollout["completions"].numel()),
+                    group_size=self.config.rollout_group_size,
                 )
-                step_metrics.update(
-                    {
-                        "train/loss": float(bundle.loss.item()),
-                        "train/advantage_mean": float(adv.mean().item()),
-                        "train/advantage_std": float(adv.std(unbiased=False).item()),
-                        "eval/accuracy": reward_mean,
-                        "eval/completion_length": float(rollout["completions"].shape[1]),
-                        "system/step_time": perf_counter() - rollout_start,
-                        **bundle.metrics,
-                    }
-                )
-                if torch.cuda.is_available():
-                    step_metrics["system/gpu_mem_allocated"] = float(torch.cuda.memory_allocated())
-                    step_metrics["system/gpu_mem_reserved"] = float(torch.cuda.memory_reserved())
+                reward_mean = float(rollout["rewards"].mean().item())
+                reward_std = float(rollout["rewards"].std(unbiased=False).item())
 
-                tokens_per_sec = 0.0
-                elapsed = max(perf_counter() - rollout_start, 1e-6)
-                tokens_per_sec = float(rollout["completions"].numel() / elapsed)
-                step_metrics["system/tokens_per_sec"] = tokens_per_sec
+                step_metrics: dict[str, float] = {
+                    "train/reward_mean": reward_mean,
+                    "train/reward_std": reward_std,
+                    "eval/reward_mean": reward_mean,
+                }
+                for epoch_idx in range(self.config.ppo_epochs):
+                    self._emit("backward", ppo_epoch=epoch_idx + 1)
+                    stats = self._current_policy_stats(torch, model, rollout)
+                    self._emit("stats_ready", sequence_steps=int(stats["current_logprobs"].shape[1]))
+                    bundle = self._loss_for_algo(torch, rollout, stats)
+                    optimizer.zero_grad()
+                    bundle.loss.backward()
+                    optimizer.step()
 
-                self.tb.add_scalars(self.global_step, step_metrics)
-                self.tb.flush()
+                    adv = compute_group_advantages(
+                        rollout["rewards"], "grpo" if self.config.algo == "grpo" else "ppo"
+                    )
+                    step_metrics.update(
+                        {
+                            "train/loss": float(bundle.loss.item()),
+                            "train/advantage_mean": float(adv.mean().item()),
+                            "train/advantage_std": float(adv.std(unbiased=False).item()),
+                            "eval/accuracy": reward_mean,
+                            "eval/completion_length": float(rollout["completions"].shape[1]),
+                            "system/step_time": perf_counter() - rollout_start,
+                            **bundle.metrics,
+                        }
+                    )
+                    if torch.cuda.is_available():
+                        step_metrics["system/gpu_mem_allocated"] = float(torch.cuda.memory_allocated())
+                        step_metrics["system/gpu_mem_reserved"] = float(torch.cuda.memory_reserved())
 
-            if self.global_step % self.config.save_every == 0:
-                self._emit("saving")
-                checkpoint_metrics = self._checkpoint(torch, model, tokenizer, optimizer)
-                self.tb.add_scalars(self.global_step, checkpoint_metrics)
+                    elapsed = max(perf_counter() - rollout_start, 1e-6)
+                    step_metrics["system/tokens_per_sec"] = float(rollout["completions"].numel() / elapsed)
 
-            if self.global_step % self.config.log_every == 0:
-                self._emit("running", **step_metrics)
+                    self.tb.add_scalars(self.global_step, step_metrics)
+                    self.tb.flush()
 
-        self._emit("done", total_steps=self.global_step)
-        self.tb.close()
-        return self.last_status
+                if self.global_step % self.config.save_every == 0:
+                    self._emit("saving")
+                    checkpoint_metrics = self._checkpoint(torch, model, tokenizer, optimizer)
+                    self.tb.add_scalars(self.global_step, checkpoint_metrics)
+
+                if self.global_step % self.config.log_every == 0:
+                    self._emit("running", **step_metrics)
+
+            self._emit("done", total_steps=self.global_step)
+            self.tb.close()
+            return self.last_status
+        except Exception as exc:
+            self._emit("error", error=str(exc), traceback=traceback.format_exc())
+            self.tb.close()
+            raise
 
     def compare_divergence(self) -> dict[str, float]:
         self.hf_username, self.hf_token = self._prepare_hf_auth()

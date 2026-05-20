@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import traceback
 
 from llmrl.config import DEFAULT_ALGOS, DEFAULT_DATASET, DEFAULT_MODELS, RunConfig
 from llmrl.runtime import Trainer
@@ -65,6 +66,81 @@ def apply_smoke_preset(args) -> None:
     args.save_every = min(args.save_every, 2)
 
 
+def make_cli_callback():
+    def _callback(payload: dict[str, object]) -> None:
+        phase = str(payload.get("phase", "unknown"))
+        step = int(payload.get("global_step", 0))
+        if phase == "auth":
+            print("[auth] checking Hugging Face credentials", flush=True)
+        elif phase == "load_start":
+            print(
+                f"[load] starting | finetune={payload.get('finetune_method')} "
+                f"offload={payload.get('cpu_offload')} split={payload.get('dataset_split')}",
+                flush=True,
+            )
+        elif phase == "tokenizer_loaded":
+            print("[load] tokenizer ready", flush=True)
+        elif phase == "model_loaded":
+            print(
+                f"[load] model ready | cuda_available={payload.get('cuda_available')} "
+                f"device={payload.get('model_device')}",
+                flush=True,
+            )
+        elif phase == "adapter_ready":
+            print(
+                f"[load] adapters ready | method={payload.get('finetune_method')} "
+                f"trainable_params={payload.get('trainable_params')}",
+                flush=True,
+            )
+        elif phase == "dataset_loading":
+            print(f"[data] loading {payload.get('dataset')} [{payload.get('split')}]", flush=True)
+        elif phase == "dataset_loaded":
+            print(f"[data] loaded {payload.get('examples')} examples", flush=True)
+        elif phase == "optimizer_ready":
+            print(f"[optim] ready | lr={payload.get('learning_rate')}", flush=True)
+        elif phase == "resumed":
+            print(f"[resume] from {payload.get('resume_path')} @ step {payload.get('global_step')}", flush=True)
+        elif phase == "ready":
+            print(f"[run] ready | logdir={payload.get('run_dir')}", flush=True)
+        elif phase == "sampling":
+            print(f"[step {step}] sampling", flush=True)
+        elif phase == "rollout_ready":
+            print(
+                f"[step {step}] rollout ready | tokens={payload.get('completion_tokens')} "
+                f"group={payload.get('group_size')}",
+                flush=True,
+            )
+        elif phase == "backward":
+            print(f"[step {step}] backward | ppo_epoch={payload.get('ppo_epoch')}", flush=True)
+        elif phase == "stats_ready":
+            print(f"[step {step}] stats ready | seq_steps={payload.get('sequence_steps')}", flush=True)
+        elif phase == "saving":
+            print(f"[step {step}] saving checkpoint", flush=True)
+        elif phase == "uploading":
+            print(f"[step {step}] uploading checkpoint", flush=True)
+        elif phase == "adapter_fallback":
+            print(
+                f"[adapter] fallback {payload.get('requested_method')} -> {payload.get('fallback_method')} "
+                f"| {payload.get('reason')}",
+                flush=True,
+            )
+        elif phase == "running":
+            print(
+                f"[step {step}] reward={float(payload.get('train/reward_mean', 0.0)):.4f} "
+                f"loss={float(payload.get('train/loss', 0.0)):.4f} "
+                f"tps={float(payload.get('system/tokens_per_sec', 0.0)):.2f}",
+                flush=True,
+            )
+        elif phase == "done":
+            print(f"[done] total_steps={payload.get('total_steps', step)}", flush=True)
+        elif phase == "error":
+            print(f"[error] {payload.get('error')}", flush=True)
+            tb = str(payload.get("traceback", "")).strip()
+            if tb:
+                print(tb, flush=True)
+    return _callback
+
+
 def main() -> None:
     args = build_parser().parse_args()
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
@@ -110,13 +186,21 @@ def main() -> None:
         eval_only=args.eval_only,
     )
     if args.eval_only:
-        trainer = Trainer(config)
-        trainer.compare_divergence()
+        trainer = Trainer(config, callback=make_cli_callback())
+        try:
+            trainer.compare_divergence()
+        except Exception:
+            print(traceback.format_exc(), flush=True)
+            raise
     elif args.tui:
         run_config_with_tui(config)
     else:
-        trainer = Trainer(config)
-        trainer.train()
+        trainer = Trainer(config, callback=make_cli_callback())
+        try:
+            trainer.train()
+        except Exception:
+            print(traceback.format_exc(), flush=True)
+            raise
 
 
 if __name__ == "__main__":
