@@ -321,6 +321,12 @@ If you are on a proper `48 GB` GPU machine, you can be a bit more aggressive tha
 
 These are the commands I would use first.
 
+At this model size, `full` finetuning is also a reasonable thing to try on `48 GB` VRAM. I would still start with:
+- HRM -> `lora`
+- LFM -> `qlora`
+
+But if you specifically want the full-finetune runs, use the commands below.
+
 ### HRM DPPO top-k on 48 GB
 
 ```bash
@@ -367,6 +373,52 @@ These are the commands I would use first.
   --max-new-tokens 128
 ```
 
+### HRM DPPO top-k full finetune on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method full \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16
+```
+
+### HRM PPO full finetune on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo ppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method full \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1
+```
+
+### HRM GRPO full finetune on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model sapientinc/HRM-Text-1B \
+  --algo grpo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method full \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128
+```
+
 ### LFM DPPO top-k on 48 GB
 
 ```bash
@@ -408,6 +460,52 @@ These are the commands I would use first.
   --dataset test-time-compute/aime_2025 \
   --dataset-split train \
   --finetune-method qlora \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128
+```
+
+### LFM DPPO top-k full finetune on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo dppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method full \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1 \
+  --dppo-approx topk \
+  --topk 16
+```
+
+### LFM PPO full finetune on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo ppo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method full \
+  --rollout-group-size 4 \
+  --max-prompt-tokens 1024 \
+  --max-new-tokens 128 \
+  --ppo-epochs 1
+```
+
+### LFM GRPO full finetune on 48 GB
+
+```bash
+.venv/bin/python train.py \
+  --model LiquidAI/LFM2.5-1.2B-Thinking \
+  --algo grpo \
+  --dataset test-time-compute/aime_2025 \
+  --dataset-split train \
+  --finetune-method full \
   --rollout-group-size 4 \
   --max-prompt-tokens 1024 \
   --max-new-tokens 128
